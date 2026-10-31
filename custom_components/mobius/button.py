@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -11,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import MobiusRuntimeData
+from .const import DOMAIN
 from .coordinator import MobiusDeviceCoordinator, async_tank_broadcast
 from .entity import async_run_on_device, entry_tank_identifier, iter_entry_devices
 
@@ -43,12 +46,20 @@ class RebootButton(CoordinatorEntity[MobiusDeviceCoordinator], ButtonEntity):
         )
 
 
+REFILL_CONFIRM_SECONDS = 10
+
+
 class RefillContainerButton(CoordinatorEntity[MobiusDeviceCoordinator], ButtonEntity):
     """Marks a dosing pump's container as refilled: sets the remaining
-    volume back to the container size, like the app's "Refill"."""
+    volume back to the container size, like the app's "Refill".
+
+    It writes to the pump, so it needs two presses: the first one only arms
+    it (and says so in a persistent notification), a second press within
+    REFILL_CONFIRM_SECONDS does the refill."""
 
     _attr_has_entity_name = True
     _attr_icon = "mdi:cup-water"
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: MobiusDeviceCoordinator, serial: str,
                  device_info: DeviceInfo) -> None:
@@ -57,9 +68,35 @@ class RefillContainerButton(CoordinatorEntity[MobiusDeviceCoordinator], ButtonEn
         self._attr_unique_id = f"{serial}_refill_container"
         self._attr_translation_key = "refill_container"
         self._attr_device_info = device_info
+        self._armed_at: float | None = None
+
+    @property
+    def _notification_id(self) -> str:
+        return f"{DOMAIN}_refill_{self._serial}"
 
     async def async_press(self) -> None:
+        from homeassistant.components import persistent_notification
         from .coordinator import DOSE_ATTR_CONTAINER_CURRENT_VOLUME
+
+        now = time.monotonic()
+        if self._armed_at is None or now - self._armed_at > REFILL_CONFIRM_SECONDS:
+            self._armed_at = now
+            name = (self.device_entry.name_by_user or self.device_entry.name) if self.device_entry else self._serial
+            if (self.hass.config.language or "").startswith("de"):
+                title = "Mobius: Auffüllen bestätigen"
+                message = (f"{name}: \"Behälter auffüllen\" innerhalb von "
+                           f"{REFILL_CONFIRM_SECONDS} s erneut drücken, um den "
+                           f"Behälter als aufgefüllt zu markieren.")
+            else:
+                title = "Mobius: confirm refill"
+                message = (f"{name}: press \"Refill container\" again within "
+                           f"{REFILL_CONFIRM_SECONDS} s to mark the container as refilled.")
+            persistent_notification.async_create(
+                self.hass, message, title=title, notification_id=self._notification_id,
+            )
+            return
+        self._armed_at = None
+        persistent_notification.async_dismiss(self.hass, self._notification_id)
 
         volume = ((self.coordinator.data or {}).get("dose") or {}).get("container_volume_ul")
         if not volume or volume <= 0:
