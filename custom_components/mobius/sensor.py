@@ -573,7 +573,7 @@ class DoseDailyTargetSensor(_DoseSensor):
     _icon = "mdi:calendar-today"
     _unit = "mL"
     _device_class = SensorDeviceClass.VOLUME
-    _state_class = SensorStateClass.MEASUREMENT
+    _state_class = None
 
     @property
     def native_value(self):
