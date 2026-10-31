@@ -43,6 +43,36 @@ class RebootButton(CoordinatorEntity[MobiusDeviceCoordinator], ButtonEntity):
         )
 
 
+class RefillContainerButton(CoordinatorEntity[MobiusDeviceCoordinator], ButtonEntity):
+    """Marks a dosing pump's container as refilled: sets the remaining
+    volume back to the container size, like the app's "Refill"."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:cup-water"
+
+    def __init__(self, coordinator: MobiusDeviceCoordinator, serial: str,
+                 device_info: DeviceInfo) -> None:
+        super().__init__(coordinator)
+        self._serial = serial
+        self._attr_unique_id = f"{serial}_refill_container"
+        self._attr_translation_key = "refill_container"
+        self._attr_device_info = device_info
+
+    async def async_press(self) -> None:
+        from .coordinator import DOSE_ATTR_CONTAINER_CURRENT_VOLUME
+
+        volume = ((self.coordinator.data or {}).get("dose") or {}).get("container_volume_ul")
+        if not volume or volume <= 0:
+            raise HomeAssistantError(f"{self._serial}: container size unknown, cannot refill")
+        payload = int(volume).to_bytes(4, "little", signed=True)
+        await async_run_on_device(
+            self.coordinator,
+            lambda device: device.set_attribute(DOSE_ATTR_CONTAINER_CURRENT_VOLUME, payload),
+            f"Failed to refill the container of {self._serial}",
+        )
+        await self.coordinator.async_request_refresh()
+
+
 class RestartAllButton(ButtonEntity):
     """
     Soft-reboots every device of the tank (reboot_all(), the app's "Restart
@@ -106,4 +136,6 @@ async def async_setup_entry(
     entities: list[ButtonEntity] = [RestartAllButton(entry, tank_identifier), RefreshAllDataButton(entry, tank_identifier)]
     for serial, coordinator, device_info, _data in iter_entry_devices(hass, entry):
         entities.append(RebootButton(coordinator, serial, device_info))
+        if _data.get("dose"):
+            entities.append(RefillContainerButton(coordinator, serial, device_info))
     async_add_entities(entities)
