@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable, Iterator, TypeVar
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
+from homeassistant.helpers import device_registry as dr
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -28,7 +29,8 @@ def entry_tank_identifier(entry: ConfigEntry) -> tuple[str, str]:
 
 def _device_info(serial: str, data: dict, address: str | None = None,
                  sw_version: str | None = None, hw_version: str | None = None,
-                 via_device_id: str | None = None) -> DeviceInfo:
+                 via_device_id: str | None = None,
+                 fallback_name: str | None = None) -> DeviceInfo:
     """
     DeviceInfo of a Mobius device. Identified by serial (tank peers have no
     stored address; coordinator.py's _sync_device_registry_info() looks
@@ -37,9 +39,16 @@ def _device_info(serial: str, data: dict, address: str | None = None,
     (resolve_tank_device_id()).
 
     The device's own name is often empty, so the fallback includes the
-    serial to tell identical models apart.
+    serial to tell identical models apart. `fallback_name` (the name already
+    in the device registry) is used when the device could not be read yet,
+    so an unreachable device at startup keeps its name instead of being
+    renamed to the placeholder.
     """
-    name = device_display_name(serial, data) or (f"Mobius device ({serial})" if serial else "Mobius device")
+    name = (
+        device_display_name(serial, data)
+        or fallback_name
+        or (f"Mobius device ({serial})" if serial else "Mobius device")
+    )
     return DeviceInfo(
         identifiers={(DOMAIN, serial)},
         connections={("bluetooth", address)} if address else set(),
@@ -51,6 +60,16 @@ def _device_info(serial: str, data: dict, address: str | None = None,
         hw_version=hw_version,
         via_device_id=via_device_id,
     )
+
+
+def _registry_name(hass: HomeAssistant, entry: ConfigEntry, serial: str) -> str | None:
+    """The device's current (integration-set) name in the device registry,
+    unless that is still the placeholder."""
+    device_entry = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, serial), entry.entry_id)
+    name = device_entry.name if device_entry else None
+    if not name or name.startswith("Mobius device"):
+        return None
+    return name
 
 
 def iter_entry_devices(
@@ -80,6 +99,7 @@ def iter_entry_devices(
             sw_version=derive_sw_version(data.get("firmware_versions", {})),
             hw_version=derive_hw_version(data.get("hardware_info", {})),
             via_device_id=via_device_id,
+            fallback_name=_registry_name(hass, entry, serial),
         )
         yield serial, coordinator, device_info, data
 

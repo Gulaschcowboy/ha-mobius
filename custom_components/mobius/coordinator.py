@@ -600,6 +600,10 @@ _DOSE_FLAG_CONSTANT = 0x20                # DosePrimitive FLAG_CONSTANT: volume 
 _DOSE_PRIMITIVE_SIZE = 9                  # DoseDuration i32 (s), DoseVolume i32 (ul), DoseFlags u8
 
 
+# serial -> (read at, schedule blocks); refreshed every STATIC_REFRESH_INTERVAL.
+_DOSE_SCHEDULE_CACHE: dict[Any, tuple[Any, list]] = {}
+
+
 def _dose_schedule_blocks(raw_points) -> list[tuple[int, int, int, bool]]:
     """Schedule1 values of a dosing pump as (start_min, duration_min,
     volume_ul, constant) blocks. Mirrors the app's Point/DosePrimitive:
@@ -674,16 +678,25 @@ async def _read_dose_container(device, supported_attribute_ids) -> Optional[dict
     if _int(DOSE_ATTR_CONTAINER_CURRENT_VOLUME) is None:
         return None
     daily_target = expected = None
-    if DOSE_ATTR_SCHEDULE1 in (supported_attribute_ids or ()):
+    serial = getattr(device, "serial", None)
+    cached = _DOSE_SCHEDULE_CACHE.get(serial)
+    blocks = cached[1] if cached else None
+    if DOSE_ATTR_SCHEDULE1 in (supported_attribute_ids or ()) and (
+        cached is None or dt_util.utcnow() - cached[0] >= STATIC_REFRESH_INTERVAL
+    ):
+        # The schedule rarely changes and is a multi-element read, so it is
+        # read like the other static attributes (keeps relayed polls short).
         try:
             points = await device.get_attribute(DOSE_ATTR_SCHEDULE1, index=0, count=0xFFFF)
         except Exception as err:  # noqa: BLE001 - schedule is optional
             _LOGGER.debug("Reading the dose schedule failed: %s", err)
         else:
             blocks = _dose_schedule_blocks(points)
-            now = dt_util.now()
-            daily_target = _dose_daily_target_ul(blocks)
-            expected = _dose_expected_until_ul(blocks, now.hour * 60 + now.minute)
+            _DOSE_SCHEDULE_CACHE[serial] = (dt_util.utcnow(), blocks)
+    if blocks is not None:
+        now = dt_util.now()
+        daily_target = _dose_daily_target_ul(blocks)
+        expected = _dose_expected_until_ul(blocks, now.hour * 60 + now.minute)
     monitor = _int(DOSE_ATTR_CONTAINER_MONITOR, signed=False)
     sensor_type = _int(DOSE_ATTR_SENSOR_TYPE, signed=False)
     halt = _int(DOSE_ATTR_HALT_STATE, signed=False)
