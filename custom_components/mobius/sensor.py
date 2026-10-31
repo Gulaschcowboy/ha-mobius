@@ -66,6 +66,7 @@ class _DataKeySensor(MobiusEntity):
     _key: str
     _icon: str
     _diagnostic = False
+    _enabled_default = True
 
     def __init__(self, coordinator, serial, device_info):
         super().__init__(
@@ -491,6 +492,7 @@ class _DoseSensor(MobiusEntity):
     _device_class = None
     _state_class = None
     _diagnostic = False
+    _enabled_default = True
 
     def __init__(self, coordinator, serial, device_info):
         super().__init__(
@@ -499,6 +501,7 @@ class _DoseSensor(MobiusEntity):
                 key=self._key, translation_key=self._key, icon=self._icon,
                 native_unit_of_measurement=self._unit, device_class=self._device_class,
                 state_class=self._state_class,
+                entity_registry_enabled_default=self._enabled_default,
             ),
             device_info, diagnostic=self._diagnostic,
         )
@@ -613,6 +616,7 @@ class ContainerMonitorSensor(_DoseSensor):
     _key = "container_monitor"
     _icon = "mdi:eye-outline"
     _diagnostic = True
+    _enabled_default = False
 
     @property
     def native_value(self):

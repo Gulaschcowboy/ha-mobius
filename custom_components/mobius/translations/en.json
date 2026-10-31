@@ -113,7 +113,7 @@
         "name": "Refresh all data"
       },
       "refill_container": {
-        "name": "Refill container"
+        "name": "Refill container (press twice to confirm)"
       }
     },
     "switch": {
