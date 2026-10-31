@@ -83,12 +83,6 @@
       "container_level": {
         "name": "Container level"
       },
-      "container_days_left": {
-        "name": "Container days left"
-      },
-      "daily_dosage": {
-        "name": "Daily dosage"
-      },
       "dosed_today": {
         "name": "Dosed today"
       },

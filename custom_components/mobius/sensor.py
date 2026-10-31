@@ -7,7 +7,6 @@ how many scene slots are used.
 from __future__ import annotations
 
 import logging
-import math
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -556,40 +555,6 @@ class ContainerLevelSensor(_DoseSensor):
         return max(0, min(100, round(current * 100 / total)))
 
 
-class ContainerDaysLeftSensor(_DoseSensor):
-    """Days until the container is empty, as the app shows it:
-    ceil(remaining / daily dosage)."""
-
-    _key = "container_days_left"
-    _icon = "mdi:calendar-clock"
-    _unit = "d"
-    _state_class = SensorStateClass.MEASUREMENT
-
-    @property
-    def native_value(self):
-        current = self.dose.get("container_current_volume_ul")
-        daily = self.dose.get("daily_dosage_ul")
-        if current is None:
-            return None
-        if current <= 0:
-            return 0
-        if not daily or daily <= 0:
-            return None
-        return math.ceil(current / daily)
-
-
-class DailyDosageSensor(_DoseSensor):
-    _key = "daily_dosage"
-    _icon = "mdi:water-outline"
-    _unit = "mL"
-    _device_class = SensorDeviceClass.VOLUME
-    _diagnostic = True
-
-    @property
-    def native_value(self):
-        return _ul_to_ml(self.dose.get("daily_dosage_ul"))
-
-
 class DosedTodaySensor(_DoseSensor):
     _key = "dosed_today"
     _icon = "mdi:water-check"
@@ -599,7 +564,7 @@ class DosedTodaySensor(_DoseSensor):
 
     @property
     def native_value(self):
-        return _ul_to_ml(self.dose.get("current_dosage_ul"))
+        return _ul_to_ml(self.dose.get("dispensed_today_ul"))
 
 
 class ContainerMonitorSensor(_DoseSensor):
@@ -626,8 +591,6 @@ def _build_dose_entities(coordinator, serial, device_info) -> list[SensorEntity]
         ContainerRemainingSensor(coordinator, serial, device_info),
         ContainerVolumeSensor(coordinator, serial, device_info),
         ContainerLevelSensor(coordinator, serial, device_info),
-        ContainerDaysLeftSensor(coordinator, serial, device_info),
-        DailyDosageSensor(coordinator, serial, device_info),
         DosedTodaySensor(coordinator, serial, device_info),
         ContainerMonitorSensor(coordinator, serial, device_info),
         DoseHaltStateSensor(coordinator, serial, device_info),

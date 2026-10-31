@@ -577,18 +577,17 @@ def _format_pump_params(params: dict, group: Optional[PanGroup]) -> dict[str, ob
 
 # Dosing pumps (Versa): container fill level. Attribute ids and encodings
 # from the Mobius app (DoseInfo / RoutineFragment.refillContainer).
-DOSE_ATTR_DAILY_DOSAGE = 2301            # i32le, microlitres per day
+DOSE_ATTR_DISPENSED_TODAY = 2301         # i32le, microlitres dispensed today (app: "DailyDosage", shown as "Dispensed")
 DOSE_ATTR_SENSOR_TYPE = 2305             # u8: 0 None, 1 Float, 2 pH
 DOSE_ATTR_CONTAINER_MONITOR = 2310       # u8: 0 None, 1 Countdown, 2 Sensor
 DOSE_ATTR_CONTAINER_VOLUME = 2312        # i32le, microlitres
 DOSE_ATTR_CONTAINER_CURRENT_VOLUME = 2313  # i32le, microlitres (counted down by the pump)
-DOSE_ATTR_CURRENT_DOSAGE = 2315          # u32le, microlitres dosed today
 DOSE_ATTR_HALT_STATE = 2322              # u8: 0 None, 1 Pause, 2 Stop
 
 _DOSE_ATTRS = (
-    DOSE_ATTR_DAILY_DOSAGE, DOSE_ATTR_SENSOR_TYPE, DOSE_ATTR_CONTAINER_MONITOR,
+    DOSE_ATTR_DISPENSED_TODAY, DOSE_ATTR_SENSOR_TYPE, DOSE_ATTR_CONTAINER_MONITOR,
     DOSE_ATTR_CONTAINER_VOLUME, DOSE_ATTR_CONTAINER_CURRENT_VOLUME,
-    DOSE_ATTR_CURRENT_DOSAGE, DOSE_ATTR_HALT_STATE,
+    DOSE_ATTR_HALT_STATE,
 )
 _CONTAINER_MONITOR_OPTIONS = {0: "none", 1: "countdown", 2: "sensor"}
 _DOSE_SENSOR_TYPES = {0: "none", 1: "float", 2: "ph"}
@@ -632,8 +631,7 @@ async def _read_dose_container(device, supported_attribute_ids) -> Optional[dict
     return {
         "container_volume_ul": _int(DOSE_ATTR_CONTAINER_VOLUME),
         "container_current_volume_ul": _int(DOSE_ATTR_CONTAINER_CURRENT_VOLUME),
-        "daily_dosage_ul": _int(DOSE_ATTR_DAILY_DOSAGE),
-        "current_dosage_ul": _int(DOSE_ATTR_CURRENT_DOSAGE, signed=False),
+        "dispensed_today_ul": _int(DOSE_ATTR_DISPENSED_TODAY),
         "container_monitor": _CONTAINER_MONITOR_OPTIONS.get(monitor, monitor),
         "dose_sensor_type": _DOSE_SENSOR_TYPES.get(sensor_type, sensor_type),
         "halt_state": _HALT_STATES.get(halt, halt),

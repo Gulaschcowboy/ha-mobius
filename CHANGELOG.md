@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.5b2 (fork Gulaschcowboy/ha-mobius, test build)
+
+- Fixed "Dosed today": it is attribute 2301 (the app's "Dispensed"), not
+  2315. 2301 is not the daily target volume, so the "Daily dosage" and
+  "Container days left" sensors are removed (the app computes the daily
+  volume from the dosing schedule, which is not read yet).
+
 ## 0.10.5b1 (fork Gulaschcowboy/ha-mobius, test build)
 
 - Dosing pumps (Versa): container entities, read from the container
