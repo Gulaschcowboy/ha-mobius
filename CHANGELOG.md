@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.5b4 (fork Gulaschcowboy/ha-mobius, test build)
+
+- Devices that can't be read at startup keep their registry name instead
+  of being renamed to "Mobius device (<serial>)" (also avoids
+  mobius_device_<serial> entity ids for new entities).
+- Dose schedule is read every 10 minutes instead of every poll (keeps
+  relayed polls short).
+- Daily dose sensor: no state class (volume + measurement is invalid).
+
 ## 0.10.5b3 (fork Gulaschcowboy/ha-mobius, test build)
 
 - Dosing pumps: read the dose schedule (Schedule1) and add "Daily dose
