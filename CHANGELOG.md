@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.5b3 (fork Gulaschcowboy/ha-mobius, test build)
+
+- Dosing pumps: read the dose schedule (Schedule1) and add "Daily dose
+  (schedule)", "Expected dosed so far" and "Container days left", computed
+  like the app's SparseSchedule (dailyDosage / doseBetween).
+
 ## 0.10.5b2 (fork Gulaschcowboy/ha-mobius, test build)
 
 - Fixed "Dosed today": it is attribute 2301 (the app's "Dispensed"), not

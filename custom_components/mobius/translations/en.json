@@ -91,6 +91,15 @@
       },
       "dose_halt_state": {
         "name": "Dosing halt state"
+      },
+      "dose_daily_target": {
+        "name": "Daily dose (schedule)"
+      },
+      "dose_expected_so_far": {
+        "name": "Expected dosed so far"
+      },
+      "container_days_left": {
+        "name": "Container days left"
       }
     },
     "button": {
