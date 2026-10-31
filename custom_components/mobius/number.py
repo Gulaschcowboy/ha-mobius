@@ -22,7 +22,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import MobiusRuntimeData
 from .const import POLL_INTERVAL
-from .coordinator import MobiusDeviceCoordinator
+from .coordinator import DOSE_ATTR_CONTAINER_VOLUME, MobiusDeviceCoordinator
 from .entity import async_run_on_device, entry_tank_identifier, iter_entry_devices
 
 _LOGGER = logging.getLogger(__name__)
@@ -225,10 +225,33 @@ def _build_pump_battery_numbers(coordinator, serial, device_info, data) -> list[
     return entities
 
 
+class ContainerSizeNumber(_PumpBatteryNumber):
+    """Container size of a dosing pump (attribute 2312, i32le microlitres).
+
+    Unlike the app, which also sets the remaining volume to the new size,
+    this only writes the size and leaves the remaining volume untouched
+    (use the refill button to mark the container as full)."""
+
+    _group = "dose"
+    _field = "container_volume_ul"
+    _scale = 0.001
+    _attr_native_min_value = 1
+    _attr_native_max_value = 100000
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = "mL"
+
+    async def _async_write(self, device, value: float) -> None:
+        raw = int(round(value * 1000))
+        await device.set_attribute(DOSE_ATTR_CONTAINER_VOLUME, raw.to_bytes(4, "little", signed=True))
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     entities: list[NumberEntity] = [PollIntervalNumber(entry, entry_tank_identifier(entry))]
     for serial, coordinator, device_info, data in iter_entry_devices(hass, entry):
         entities += _build_pump_battery_numbers(coordinator, serial, device_info, data)
+        if data and (data.get("dose") or {}).get("container_volume_ul") is not None:
+            entities.append(ContainerSizeNumber(
+                coordinator, serial, "container_size", "mdi:cup-outline", device_info))
     async_add_entities(entities)

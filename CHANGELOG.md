@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.5b5 (fork Gulaschcowboy/ha-mobius, test build)
+
+- Refill button renamed to "Refill container (press twice to confirm)" and moved to the configuration section. The first press only arms it and shows a notification; a second press within 10 s refills.
+- New number entity "Container size" (mL) for dosing pumps. It only changes the container size; the remaining volume is left as it is (the app sets it to full).
+- "Container monitoring" sensor is disabled by default for newly added devices.
+
 ## 0.10.5b4 (fork Gulaschcowboy/ha-mobius, test build)
 
 - Devices that can't be read at startup keep their registry name instead
