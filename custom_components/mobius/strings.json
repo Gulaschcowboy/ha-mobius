@@ -145,6 +145,9 @@
       },
       "boosted_battery_off_time": {
         "name": "Boosted battery off time"
+      },
+      "container_size": {
+        "name": "Container size"
       }
     },
     "select": {
