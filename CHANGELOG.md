@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.5b7 (fork Gulaschcowboy/ha-mobius, test build)
+
+- Attribute table retries are short again (30 s, 1 min, then every 2 min): relayed table reads often time out but succeed after a few tries, and the table is needed only once per device (it is stored). The 5/15/60 min waits of b6 kept relayed lights and pumps unavailable for an hour.
+- Only one device reads its attribute table at a time, so devices without a stored table don't time out against each other after a restart.
+
 ## 0.10.5b6 (fork Gulaschcowboy/ha-mobius, test build)
 
 - The supported attribute table (the largest read) is kept across Home Assistant restarts and read again only when it changed on the device, like the Mobius app does.

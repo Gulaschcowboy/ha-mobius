@@ -12,6 +12,7 @@ here, so the next poll reads it again.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from homeassistant.core import HomeAssistant, callback
@@ -22,6 +23,7 @@ from .const import DOMAIN
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.supported_attributes"
 _DATA_KEY = f"{DOMAIN}_supported_attributes_store"
+_LOCK_KEY = f"{DOMAIN}_supported_attributes_lock"
 SAVE_DELAY = 10
 
 
@@ -66,3 +68,11 @@ def async_forget(hass: HomeAssistant, serial: str) -> None:
     _store, data = loaded
     if data.pop(serial, None) is not None:
         _schedule_save(hass)
+
+
+def table_read_lock(hass: HomeAssistant) -> asyncio.Lock:
+    """Serializes attribute table reads across all devices."""
+    lock = hass.data.get(_LOCK_KEY)
+    if lock is None:
+        lock = hass.data[_LOCK_KEY] = asyncio.Lock()
+    return lock

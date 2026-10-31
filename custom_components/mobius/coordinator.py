@@ -1138,8 +1138,17 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"supported attribute table not read yet; next attempt in "
                 f"{int(self._attribute_table_retry_at - now)} s"
             )
+        # One table read at a time across all tanks: after a restart every
+        # device without a stored table would otherwise read it at once and
+        # the relayed reads time out against each other.
+        lock = attribute_store.table_read_lock(self.hass)
+        if lock.locked():
+            raise AttributeTableUnavailable(
+                "another device is reading its attribute table; trying again next poll"
+            )
         try:
-            supported = await device.get_supported_attributes()
+            async with lock:
+                supported = await device.get_supported_attributes()
             ids = {s.attr_id for s in supported}
             if not ids:
                 raise ValueError("empty attribute table")
@@ -1151,8 +1160,8 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._attribute_table_retry_at = now + delay.total_seconds()
             _LOGGER.warning(
                 "%s: reading the supported attribute table failed (%s) -- not polling this "
-                "device until the next attempt in %d min",
-                self.serial, err, int(delay.total_seconds() // 60),
+                "device until the next attempt in %d s",
+                self.serial, err, int(delay.total_seconds()),
             )
             raise AttributeTableUnavailable(str(err)) from err
         self._attribute_table_failures = 0

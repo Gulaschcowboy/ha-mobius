@@ -121,10 +121,11 @@ MESH_PEER_REFRESH_INTERVAL = timedelta(minutes=5)
 STATIC_REFRESH_INTERVAL = timedelta(minutes=10)
 
 # Waits before reading a device's supported attribute table again after a
-# failed read (the last one repeats). The table is the largest read and is
-# kept across restarts (attribute_store.py); without it a device isn't
-# polled, so a failing read doesn't block the shared gateway every poll.
-ATTRIBUTE_TABLE_RETRY_DELAYS = (timedelta(minutes=5), timedelta(minutes=15), timedelta(minutes=60))
+# failed read (the last one repeats). The table is the largest read; it is
+# needed only once per device because it is kept across restarts
+# (attribute_store.py). Relayed reads of it often time out but succeed after
+# a few tries, so the waits stay short; table reads are serialized.
+ATTRIBUTE_TABLE_RETRY_DELAYS = (timedelta(seconds=30), timedelta(minutes=1), timedelta(minutes=2))
 
 # A tank's clock is set when any of its devices drifts more than this many
 # seconds from Home Assistant's clock, or reports a different time zone
