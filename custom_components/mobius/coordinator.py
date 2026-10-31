@@ -595,6 +595,53 @@ _DOSE_SENSOR_TYPES = {0: "none", 1: "float", 2: "ph"}
 _HALT_STATES = {0: "none", 1: "pause", 2: "stop"}
 
 
+DOSE_ATTR_SCHEDULE1 = 500                 # Schedule1: sparse dose schedule points
+_DOSE_FLAG_CONSTANT = 0x20                # DosePrimitive FLAG_CONSTANT: volume is per minute
+_DOSE_PRIMITIVE_SIZE = 9                  # DoseDuration i32 (s), DoseVolume i32 (ul), DoseFlags u8
+
+
+def _dose_schedule_blocks(raw_points) -> list[tuple[int, int, int, bool]]:
+    """Schedule1 values of a dosing pump as (start_min, duration_min,
+    volume_ul, constant) blocks. Mirrors the app's Point/DosePrimitive:
+    header time u16 LE + flags u8 (bit 0 = active), then the primitive."""
+    blocks = []
+    for data in raw_points or ():
+        data = bytes(data)
+        if len(data) < 3 + _DOSE_PRIMITIVE_SIZE or not data[2] & 1:
+            continue
+        if (len(data) - 3) % _DOSE_PRIMITIVE_SIZE:
+            continue
+        start = int.from_bytes(data[0:2], "little") % 1440
+        duration_s = int.from_bytes(data[3:7], "little", signed=True)
+        volume = int.from_bytes(data[7:11], "little", signed=True)
+        flags = data[11]
+        duration = min(max(1, duration_s // 60), 1440)
+        blocks.append((start, duration, volume, bool(flags & _DOSE_FLAG_CONSTANT)))
+    return blocks
+
+
+def _dose_daily_target_ul(blocks) -> int:
+    """SparseSchedule.dailyDosage(): constant blocks dose volume per
+    minute, the others their volume once."""
+    return sum(v * d if constant else v for _s, d, v, constant in blocks)
+
+
+def _dose_expected_until_ul(blocks, minute_of_day: int) -> int:
+    """SparseSchedule.doseBetween(0, minute_of_day): what the schedule
+    should have dispensed since midnight."""
+    total = 0
+    for start, duration, volume, constant in blocks:
+        end = start + duration
+        ranges = [(start, min(end, 1440))]
+        if end > 1440:
+            ranges.append((0, end - 1440))
+        overlap = sum(max(0, min(b, minute_of_day) - a) for a, b in ranges)
+        if overlap <= 0:
+            continue
+        total += volume * overlap if constant else (volume * overlap) // duration
+    return total
+
+
 async def _read_dose_container(device, supported_attribute_ids) -> Optional[dict[str, Any]]:
     """The container fill level of a dosing pump, or None when the device
     has no container attributes."""
@@ -626,6 +673,17 @@ async def _read_dose_container(device, supported_attribute_ids) -> Optional[dict
 
     if _int(DOSE_ATTR_CONTAINER_CURRENT_VOLUME) is None:
         return None
+    daily_target = expected = None
+    if DOSE_ATTR_SCHEDULE1 in (supported_attribute_ids or ()):
+        try:
+            points = await device.get_attribute(DOSE_ATTR_SCHEDULE1, index=0, count=0xFFFF)
+        except Exception as err:  # noqa: BLE001 - schedule is optional
+            _LOGGER.debug("Reading the dose schedule failed: %s", err)
+        else:
+            blocks = _dose_schedule_blocks(points)
+            now = dt_util.now()
+            daily_target = _dose_daily_target_ul(blocks)
+            expected = _dose_expected_until_ul(blocks, now.hour * 60 + now.minute)
     monitor = _int(DOSE_ATTR_CONTAINER_MONITOR, signed=False)
     sensor_type = _int(DOSE_ATTR_SENSOR_TYPE, signed=False)
     halt = _int(DOSE_ATTR_HALT_STATE, signed=False)
@@ -633,6 +691,8 @@ async def _read_dose_container(device, supported_attribute_ids) -> Optional[dict
         "container_volume_ul": _int(DOSE_ATTR_CONTAINER_VOLUME),
         "container_current_volume_ul": _int(DOSE_ATTR_CONTAINER_CURRENT_VOLUME),
         "dispensed_today_ul": _int(DOSE_ATTR_DISPENSED_TODAY),
+        "daily_target_ul": daily_target,
+        "expected_so_far_ul": expected,
         "container_monitor": _CONTAINER_MONITOR_OPTIONS.get(monitor, monitor),
         "dose_sensor_type": _DOSE_SENSOR_TYPES.get(sensor_type, sensor_type),
         "halt_state": _HALT_STATES.get(halt, halt),

@@ -567,6 +567,48 @@ class DosedTodaySensor(_DoseSensor):
         return _ul_to_ml(self.dose.get("dispensed_today_ul"))
 
 
+class DoseDailyTargetSensor(_DoseSensor):
+    """Daily volume of the dose schedule (the app's "Daily volume")."""
+    _key = "dose_daily_target"
+    _icon = "mdi:calendar-today"
+    _unit = "mL"
+    _device_class = SensorDeviceClass.VOLUME
+    _state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self):
+        return _ul_to_ml(self.dose.get("daily_target_ul"))
+
+
+class DoseExpectedSoFarSensor(_DoseSensor):
+    """What the schedule should have dispensed since midnight."""
+    _key = "dose_expected_so_far"
+    _icon = "mdi:progress-clock"
+    _unit = "mL"
+    _device_class = SensorDeviceClass.VOLUME
+    _state_class = SensorStateClass.TOTAL_INCREASING
+
+    @property
+    def native_value(self):
+        return _ul_to_ml(self.dose.get("expected_so_far_ul"))
+
+
+class ContainerDaysLeftSensor(_DoseSensor):
+    """Remaining container volume divided by the schedule's daily volume."""
+    _key = "container_days_left"
+    _icon = "mdi:calendar-clock"
+    _unit = "d"
+    _state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self):
+        remaining = self.dose.get("container_current_volume_ul")
+        target = self.dose.get("daily_target_ul")
+        if remaining is None or not target or target <= 0:
+            return None
+        return round(max(remaining, 0) / target, 1)
+
+
 class ContainerMonitorSensor(_DoseSensor):
     _key = "container_monitor"
     _icon = "mdi:eye-outline"
@@ -592,6 +634,9 @@ def _build_dose_entities(coordinator, serial, device_info) -> list[SensorEntity]
         ContainerVolumeSensor(coordinator, serial, device_info),
         ContainerLevelSensor(coordinator, serial, device_info),
         DosedTodaySensor(coordinator, serial, device_info),
+        DoseDailyTargetSensor(coordinator, serial, device_info),
+        DoseExpectedSoFarSensor(coordinator, serial, device_info),
+        ContainerDaysLeftSensor(coordinator, serial, device_info),
         ContainerMonitorSensor(coordinator, serial, device_info),
         DoseHaltStateSensor(coordinator, serial, device_info),
     ]
