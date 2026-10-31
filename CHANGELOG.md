@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.5b1 (fork Gulaschcowboy/ha-mobius, test build)
+
+- Dosing pumps (Versa): container entities, read from the container
+  attributes the pump reports (2301, 2310, 2312, 2313, 2315, 2322):
+  container remaining (mL), container level (%), days left until empty,
+  dosed today, daily dosage, container size, container monitoring mode,
+  dosing halt state, a "container empty" binary sensor and a
+  "Refill container" button (sets the remaining volume back to the
+  container size, like the app's "Refill").
+
 ## 0.10.4
 
 - Fixed a deprecation warning about `DeviceEntry.config_entries`.

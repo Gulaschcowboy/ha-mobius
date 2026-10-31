@@ -7,6 +7,7 @@ how many scene slots are used.
 from __future__ import annotations
 
 import logging
+import math
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -481,11 +482,167 @@ class GatewayDeviceSensor(SensorEntity):
         return {"serial": serial}
 
 
+
+class _DoseSensor(MobiusEntity):
+    """A dosing pump container sensor computed from coordinator.data["dose"]."""
+
+    _key: str
+    _icon: str
+    _unit: str | None = None
+    _device_class = None
+    _state_class = None
+    _diagnostic = False
+
+    def __init__(self, coordinator, serial, device_info):
+        super().__init__(
+            coordinator, serial, self._key,
+            SensorEntityDescription(
+                key=self._key, translation_key=self._key, icon=self._icon,
+                native_unit_of_measurement=self._unit, device_class=self._device_class,
+                state_class=self._state_class,
+            ),
+            device_info, diagnostic=self._diagnostic,
+        )
+
+    @property
+    def dose(self) -> dict:
+        return self.data.get("dose") or {}
+
+    @property
+    def available(self) -> bool:
+        return super().available and bool(self.data.get("dose"))
+
+
+def _ul_to_ml(value):
+    return None if value is None else round(value / 1000.0, 1)
+
+
+class ContainerRemainingSensor(_DoseSensor):
+    _key = "container_remaining"
+    _icon = "mdi:cup-water"
+    _unit = "mL"
+    _device_class = SensorDeviceClass.VOLUME_STORAGE
+    _state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self):
+        return _ul_to_ml(self.dose.get("container_current_volume_ul"))
+
+
+class ContainerVolumeSensor(_DoseSensor):
+    _key = "container_volume"
+    _icon = "mdi:cup-outline"
+    _unit = "mL"
+    _device_class = SensorDeviceClass.VOLUME_STORAGE
+    _diagnostic = True
+
+    @property
+    def native_value(self):
+        return _ul_to_ml(self.dose.get("container_volume_ul"))
+
+
+class ContainerLevelSensor(_DoseSensor):
+    _key = "container_level"
+    _icon = "mdi:gauge"
+    _unit = "%"
+    _state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self):
+        total = self.dose.get("container_volume_ul")
+        current = self.dose.get("container_current_volume_ul")
+        if not total or current is None:
+            return None
+        return max(0, min(100, round(current * 100 / total)))
+
+
+class ContainerDaysLeftSensor(_DoseSensor):
+    """Days until the container is empty, as the app shows it:
+    ceil(remaining / daily dosage)."""
+
+    _key = "container_days_left"
+    _icon = "mdi:calendar-clock"
+    _unit = "d"
+    _state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self):
+        current = self.dose.get("container_current_volume_ul")
+        daily = self.dose.get("daily_dosage_ul")
+        if current is None:
+            return None
+        if current <= 0:
+            return 0
+        if not daily or daily <= 0:
+            return None
+        return math.ceil(current / daily)
+
+
+class DailyDosageSensor(_DoseSensor):
+    _key = "daily_dosage"
+    _icon = "mdi:water-outline"
+    _unit = "mL"
+    _device_class = SensorDeviceClass.VOLUME
+    _diagnostic = True
+
+    @property
+    def native_value(self):
+        return _ul_to_ml(self.dose.get("daily_dosage_ul"))
+
+
+class DosedTodaySensor(_DoseSensor):
+    _key = "dosed_today"
+    _icon = "mdi:water-check"
+    _unit = "mL"
+    _device_class = SensorDeviceClass.VOLUME
+    _state_class = SensorStateClass.TOTAL_INCREASING
+
+    @property
+    def native_value(self):
+        return _ul_to_ml(self.dose.get("current_dosage_ul"))
+
+
+class ContainerMonitorSensor(_DoseSensor):
+    _key = "container_monitor"
+    _icon = "mdi:eye-outline"
+    _diagnostic = True
+
+    @property
+    def native_value(self):
+        return self.dose.get("container_monitor")
+
+
+class DoseHaltStateSensor(_DoseSensor):
+    _key = "dose_halt_state"
+    _icon = "mdi:pause-octagon-outline"
+
+    @property
+    def native_value(self):
+        return self.dose.get("halt_state")
+
+
+def _build_dose_entities(coordinator, serial, device_info) -> list[SensorEntity]:
+    return [
+        ContainerRemainingSensor(coordinator, serial, device_info),
+        ContainerVolumeSensor(coordinator, serial, device_info),
+        ContainerLevelSensor(coordinator, serial, device_info),
+        ContainerDaysLeftSensor(coordinator, serial, device_info),
+        DailyDosageSensor(coordinator, serial, device_info),
+        DosedTodaySensor(coordinator, serial, device_info),
+        ContainerMonitorSensor(coordinator, serial, device_info),
+        DoseHaltStateSensor(coordinator, serial, device_info),
+    ]
+
 def _build_type_specific_entities(coordinator, serial, device_info, support, data) -> list[SensorEntity]:
     """The pump- or light-specific sensors for one device from its current
     data. Also used by __init__.py's _async_ensure_sensors_exist() to create
     sensors missed at setup.
     """
+    dose_entities = _build_dose_entities(coordinator, serial, device_info) if data.get("dose") else []
+    return dose_entities + _build_type_specific_entities_base(coordinator, serial, device_info, support, data)
+
+
+def _build_type_specific_entities_base(coordinator, serial, device_info, support, data) -> list[SensorEntity]:
     if support.startswith("pump"):
         entities: list[SensorEntity] = [
             OperationStateSensor(coordinator, serial, device_info),

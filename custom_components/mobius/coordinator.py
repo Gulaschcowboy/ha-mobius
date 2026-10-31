@@ -574,6 +574,71 @@ def _format_pump_params(params: dict, group: Optional[PanGroup]) -> dict[str, ob
     return result
 
 
+
+# Dosing pumps (Versa): container fill level. Attribute ids and encodings
+# from the Mobius app (DoseInfo / RoutineFragment.refillContainer).
+DOSE_ATTR_DAILY_DOSAGE = 2301            # i32le, microlitres per day
+DOSE_ATTR_SENSOR_TYPE = 2305             # u8: 0 None, 1 Float, 2 pH
+DOSE_ATTR_CONTAINER_MONITOR = 2310       # u8: 0 None, 1 Countdown, 2 Sensor
+DOSE_ATTR_CONTAINER_VOLUME = 2312        # i32le, microlitres
+DOSE_ATTR_CONTAINER_CURRENT_VOLUME = 2313  # i32le, microlitres (counted down by the pump)
+DOSE_ATTR_CURRENT_DOSAGE = 2315          # u32le, microlitres dosed today
+DOSE_ATTR_HALT_STATE = 2322              # u8: 0 None, 1 Pause, 2 Stop
+
+_DOSE_ATTRS = (
+    DOSE_ATTR_DAILY_DOSAGE, DOSE_ATTR_SENSOR_TYPE, DOSE_ATTR_CONTAINER_MONITOR,
+    DOSE_ATTR_CONTAINER_VOLUME, DOSE_ATTR_CONTAINER_CURRENT_VOLUME,
+    DOSE_ATTR_CURRENT_DOSAGE, DOSE_ATTR_HALT_STATE,
+)
+_CONTAINER_MONITOR_OPTIONS = {0: "none", 1: "countdown", 2: "sensor"}
+_DOSE_SENSOR_TYPES = {0: "none", 1: "float", 2: "ph"}
+_HALT_STATES = {0: "none", 1: "pause", 2: "stop"}
+
+
+async def _read_dose_container(device, supported_attribute_ids) -> Optional[dict[str, Any]]:
+    """The container fill level of a dosing pump, or None when the device
+    has no container attributes."""
+    # Only devices that report the container attributes (dosing pumps).
+    wanted = [a for a in _DOSE_ATTRS if a in (supported_attribute_ids or ())]
+    if DOSE_ATTR_CONTAINER_CURRENT_VOLUME not in wanted:
+        return None
+    raw: dict[int, bytes] = {}
+    try:
+        for block in await device.get_attributes_batch([(a, 0, 1) for a in wanted]):
+            if block.values and block.attr_id not in raw:
+                raw[block.attr_id] = block.values[0]
+    except Exception as err:  # noqa: BLE001 - fall back to single reads
+        _LOGGER.debug("Batched dose container read failed (%s), reading one by one", err)
+        for attr in wanted:
+            try:
+                values = await device.get_attribute(attr)
+            except Exception as single_err:  # noqa: BLE001
+                _LOGGER.debug("Reading dose attribute %s failed: %s", attr, single_err)
+                continue
+            if values:
+                raw[attr] = values[0]
+
+    def _int(attr: int, signed: bool = True) -> Optional[int]:
+        value = raw.get(attr)
+        if not value:
+            return None
+        return int.from_bytes(value[:4], "little", signed=signed and len(value) >= 4)
+
+    if _int(DOSE_ATTR_CONTAINER_CURRENT_VOLUME) is None:
+        return None
+    monitor = _int(DOSE_ATTR_CONTAINER_MONITOR, signed=False)
+    sensor_type = _int(DOSE_ATTR_SENSOR_TYPE, signed=False)
+    halt = _int(DOSE_ATTR_HALT_STATE, signed=False)
+    return {
+        "container_volume_ul": _int(DOSE_ATTR_CONTAINER_VOLUME),
+        "container_current_volume_ul": _int(DOSE_ATTR_CONTAINER_CURRENT_VOLUME),
+        "daily_dosage_ul": _int(DOSE_ATTR_DAILY_DOSAGE),
+        "current_dosage_ul": _int(DOSE_ATTR_CURRENT_DOSAGE, signed=False),
+        "container_monitor": _CONTAINER_MONITOR_OPTIONS.get(monitor, monitor),
+        "dose_sensor_type": _DOSE_SENSOR_TYPES.get(sensor_type, sensor_type),
+        "halt_state": _HALT_STATES.get(halt, halt),
+    }
+
 async def _fetch_all(
     device, minute_of_day_now=None, cached_supported_attribute_ids=None, batch_disabled=False,
     cached_primitive_type=None, cached_model=None, group: Optional[PanGroup] = None,
@@ -726,6 +791,13 @@ async def _fetch_all(
             f"PrimitiveType {info.get('primitive_type')!r} has no parser implemented"
             + (f" ({size} byte primitive)." if size is not None else ".")
         )
+
+    # Dosing pumps: container fill level (None for every other device).
+    try:
+        info["dose"] = await _read_dose_container(device, supported_attribute_ids)
+    except Exception as err:  # noqa: BLE001 - never fail the poll for this
+        _LOGGER.debug("Reading the dose container failed: %s", err)
+        info["dose"] = None
 
     # Device clock versus Home Assistant's (seconds; positive = device
     # behind) and its time zone, for _async_check_tank_time() in __init__.py.
