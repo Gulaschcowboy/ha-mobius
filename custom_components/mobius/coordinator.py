@@ -67,8 +67,9 @@ from bleak_retry_connector import clear_cache as clear_bluez_service_cache
 from .const import (
     ADVERTISEMENT_MAX_AGE, BATCH_FAILURE_THRESHOLD, CONNECT_TIMEOUT, DOMAIN, GATEWAY_GONE_AFTER,
     MARK_UNAVAILABLE_AFTER, MESH_LIST_FRESH_FOR_FAILURES, POLL_INTERVAL, RELAY_PROBE_TIMEOUT,
-    STATIC_REFRESH_INTERVAL,
+    STATIC_REFRESH_INTERVAL, ATTRIBUTE_TABLE_RETRY_DELAYS,
 )
+from . import attribute_store
 from .gateway_registry import GatewayRegistry, PanGroup, RestartAction
 
 _LOGGER = logging.getLogger(__name__)
@@ -927,6 +928,11 @@ async def _fetch_all(
     return info, supported_attribute_ids_to_cache, used_batch, primitive, model
 
 
+class AttributeTableUnavailable(Exception):
+    """The supported attribute table isn't known yet and reading it failed
+    recently: the device isn't polled until the next attempt."""
+
+
 class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """One coordinator per device. See the module docstring."""
 
@@ -951,6 +957,9 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Supported attribute ids, read once and again after the device's
         # attribute table changes (see _fetch_all()).
         self._supported_attribute_ids: Optional[set[int]] = None
+        # Backoff for reading the table (see _ensure_supported_attribute_ids()).
+        self._attribute_table_failures = 0
+        self._attribute_table_retry_at = 0.0
         # Scenes and schedule with their checksums, and the attributes that
         # rarely change, kept between polls.
         self.configuration_cache = ConfigurationCache(
@@ -1103,9 +1112,59 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def forget_cached_data(self) -> None:
         """Makes the next poll read everything again: the supported
         attributes, the scenes and schedule, and the attributes that
-        rarely change (the tank's "Refresh all data" button)."""
-        self._supported_attribute_ids = None
+        rarely change (the tank's "Refresh all data" button).
+
+        The supported attribute table is kept: it is the largest read, and
+        a changed table is detected by every poll anyway. A pending backoff
+        for reading it is cancelled."""
+        self._attribute_table_retry_at = 0.0
         self.configuration_cache.clear()
+
+    async def _ensure_supported_attribute_ids(self, device) -> None:
+        """Makes sure self._supported_attribute_ids is known before a poll:
+        from memory, from storage (kept across restarts), or read from the
+        device. A failed read is retried after a backoff
+        (ATTRIBUTE_TABLE_RETRY_DELAYS); until then the device is not polled,
+        so the large read doesn't block the shared gateway every poll."""
+        if self._supported_attribute_ids is not None:
+            return
+        stored = await attribute_store.async_get(self.hass, self.serial)
+        if stored is not None:
+            self._supported_attribute_ids = stored
+            return
+        now = time.monotonic()
+        if now < self._attribute_table_retry_at:
+            raise AttributeTableUnavailable(
+                f"supported attribute table not read yet; next attempt in "
+                f"{int(self._attribute_table_retry_at - now)} s"
+            )
+        try:
+            supported = await device.get_supported_attributes()
+            ids = {s.attr_id for s in supported}
+            if not ids:
+                raise ValueError("empty attribute table")
+        except Exception as err:
+            delay = ATTRIBUTE_TABLE_RETRY_DELAYS[
+                min(self._attribute_table_failures, len(ATTRIBUTE_TABLE_RETRY_DELAYS) - 1)
+            ]
+            self._attribute_table_failures += 1
+            self._attribute_table_retry_at = now + delay.total_seconds()
+            _LOGGER.warning(
+                "%s: reading the supported attribute table failed (%s) -- not polling this "
+                "device until the next attempt in %d min",
+                self.serial, err, int(delay.total_seconds() // 60),
+            )
+            raise AttributeTableUnavailable(str(err)) from err
+        self._attribute_table_failures = 0
+        self._attribute_table_retry_at = 0.0
+        self._supported_attribute_ids = ids
+        await attribute_store.async_set(self.hass, self.serial, ids)
+
+    def _forget_stored_table_if_changed(self) -> None:
+        """_fetch_all() returns None for the table when it changed on the
+        device: drop the stored copy too."""
+        if self._supported_attribute_ids is None:
+            attribute_store.async_forget(self.hass, self.serial)
 
     def _become_bluetooth_only(self) -> None:
         """Switches this coordinator to its own connection (see
@@ -1154,6 +1213,7 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.debug("%s polling as Bluetooth-only (direct)", self.serial)
         try:
             device = await self.direct_connection.ensure_connected(acquire_semaphore=False)
+            await self._ensure_supported_attribute_ids(device)
             data, self._supported_attribute_ids, used_batch, self._primitive_type, self._model = await _fetch_all(
                 device, cached_supported_attribute_ids=self._supported_attribute_ids,
                 batch_disabled=self._batch_disabled,
@@ -1161,6 +1221,7 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 group=self.registry.group(self.pan_id),
                 configuration_cache=self.configuration_cache,
             )
+            self._forget_stored_table_if_changed()
             self._record_batch_result(used_batch)
         except Exception as err:
             _LOGGER.debug("%s poll (Bluetooth-only) failed: %s", self.serial, err)
@@ -1267,12 +1328,14 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         try:
             device = await self.async_get_connected_device()
+            await self._ensure_supported_attribute_ids(device)
             data, self._supported_attribute_ids, used_batch, self._primitive_type, self._model = await _fetch_all(
                 device, cached_supported_attribute_ids=self._supported_attribute_ids,
                 batch_disabled=self._batch_disabled,
                 cached_primitive_type=self._primitive_type, cached_model=self._model, group=group,
                 configuration_cache=self.configuration_cache,
             )
+            self._forget_stored_table_if_changed()
             self._record_batch_result(used_batch)
             self.registry.update_radio_type(
                 self.pan_id, self.serial, (data.get("hardware_info") or {}).get("RadioType"),
@@ -1293,6 +1356,10 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self._check_bluetooth_only()
                 data["mesh_last_seen_at"] = None
                 return data
+        except AttributeTableUnavailable:
+            # Not a connection failure: the gateway and relay counters (and
+            # the restarts they trigger) are left alone.
+            raise
         except Exception as err:
             _LOGGER.debug(
                 "%s poll (%s) failed: %s", self.serial,

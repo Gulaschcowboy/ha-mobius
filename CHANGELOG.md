@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.5b6 (fork Gulaschcowboy/ha-mobius, test build)
+
+- The supported attribute table (the largest read) is kept across Home Assistant restarts and read again only when it changed on the device, like the Mobius app does.
+- A failed table read is retried after 5, 15, then 60 minutes instead of on every poll; until then that device isn't polled, so it no longer blocks the shared gateway for the other devices. Such failures don't count as relay failures.
+- "Refresh all data" keeps the attribute table (a changed table is detected by every poll) and cancels a pending retry wait.
+
 ## 0.10.5b5 (fork Gulaschcowboy/ha-mobius, test build)
 
 - Refill button renamed to "Refill container (press twice to confirm)" and moved to the configuration section. The first press only arms it and shows a notification; a second press within 10 s refills.
