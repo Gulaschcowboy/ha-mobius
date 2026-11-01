@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.5b12 (fork Gulaschcowboy/ha-mobius, test build)
+
+- A member that reaches the relay failure threshold through the current gateway, but was polled through another gateway earlier, is no longer restarted: the route is the likely problem, not the member. It is recorded as unpollable via the current gateway, and the gateway is replaced by one known (or not yet known) to fail fewer members. Without such a gateway, the current one is kept and nothing is restarted.
+
 ## 0.10.5b11 (fork Gulaschcowboy/ha-mobius, test build)
 
 - Mesh routes differ per gateway: a member that answers small reads but cannot be polled through the current gateway (3 polls in a row with batching already disabled, UNPOLLABLE_VIA_GATEWAY_POLLS) is recorded as unpollable via that gateway. The gateway is then replaced by a member known (or not yet known) to fail fewer members. Failures per gateway only grow until a relayed success clears them, so this settles on the gateway covering the most members instead of flapping.

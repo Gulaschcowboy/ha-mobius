@@ -197,6 +197,8 @@ class PanGroup:
     # later relayed success removes the entry). Used to move to a gateway
     # that covers more members (see record_unpollable_via_gateway()).
     unpollable_via: dict[str, set[str]] = field(default_factory=dict)
+    # Per gateway serial, the members polled through it at least once.
+    polled_via: dict[str, set[str]] = field(default_factory=dict)
     _electing: bool = False
     _gateway_elected: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -564,6 +566,40 @@ class GatewayRegistry:
                 )
                 return None
 
+            gateway = group.gateway_serial
+            polled_elsewhere = sorted(
+                g for g, polled in group.polled_via.items() if g != gateway and target_serial in polled
+            )
+            if gateway is not None and polled_elsewhere:
+                # The member was polled through another gateway this session:
+                # this gateway's mesh route to it is the likely problem, not
+                # the member -- don't restart it, move to a better gateway.
+                bad = group.unpollable_via.setdefault(gateway, set())
+                bad.add(target_serial)
+                member.consecutive_relay_failures = 0
+                avoid = self._covers_no_better(group, gateway)
+                if set(group.members) - avoid:
+                    others = ", ".join(
+                        f"{g}: {len(s)}" for g, s in sorted(group.unpollable_via.items()) if g != gateway
+                    )
+                    await self._promote_away_from_current_gateway(
+                        group,
+                        f"can't reach {', '.join(sorted(bad))} (polled through {', '.join(polled_elsewhere)} "
+                        f"before; members unpollable via other gateways: {others or 'none known'})",
+                        avoid=avoid,
+                    )
+                    for other_member in group.members.values():
+                        other_member.consecutive_relay_failures = 0
+                else:
+                    _LOGGER.warning(
+                        "%s unreachable through gateway %r for pan_id %#06x, but polled through %s "
+                        "before -- no restart; no other gateway is known to reach more members "
+                        "(unpollable via %r: %s)",
+                        target_serial, gateway, pan_id, ", ".join(polled_elsewhere), gateway,
+                        ", ".join(sorted(bad)),
+                    )
+                return None
+
             if group.restart_policy.enabled:
                 return self._next_restart(group, target_serial, now)
 
@@ -668,6 +704,7 @@ class GatewayRegistry:
             member.consecutive_relay_failures = 0
             group.relay_succeeded_via_gateway = True
             if group.gateway_serial is not None:
+                group.polled_via.setdefault(group.gateway_serial, set()).add(target_serial)
                 bad = group.unpollable_via.get(group.gateway_serial)
                 if bad and target_serial in bad:
                     bad.discard(target_serial)
