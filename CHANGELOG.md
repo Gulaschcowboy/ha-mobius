@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.5b10 (fork Gulaschcowboy/ha-mobius, test build)
+
+- A gateway through which no relayed poll succeeds while 3 different members fail (POOR_RELAY_GATEWAY_TARGETS) is now replaced like a failed gateway. The BLE-RSSI election can pick a device that relays poorly (here a Nero that does not even serve the mesh peer list), which left every other device unavailable while the gateway itself polled fine.
+
 ## 0.10.5b9 (fork Gulaschcowboy/ha-mobius, test build)
 
 - A relayed device that answers a small read but whose batched poll times out every cycle now gets batching disabled after BATCH_FAILURE_THRESHOLD polls. Before, the batch timeout marked the device unreachable for the cycle, the individual-reads fallback failed with it, and the failure was never counted -- so the device stayed unavailable for good.

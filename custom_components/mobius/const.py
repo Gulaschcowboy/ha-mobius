@@ -49,6 +49,10 @@ GATEWAY_FAILURE_THRESHOLD = 3
 # the logs show which problem occurred.
 RELAY_FAILURE_THRESHOLD = 3
 
+# A gateway through which no relayed poll succeeds while this many different
+# members fail is replaced (GatewayRegistry.record_relayed_poll_failure()).
+POOR_RELAY_GATEWAY_TARGETS = 3
+
 # A relayed poll that fails is followed by a small read of the same device
 # (its Model) with this timeout per send. When that answers, the device is
 # reachable and the failure is not counted towards RELAY_FAILURE_THRESHOLD:

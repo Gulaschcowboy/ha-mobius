@@ -77,7 +77,8 @@ from homeassistant.util import dt as dt_util
 from mobius import RADIO_TYPE_LABELS, RadioType, format_mesh_address
 
 from .const import (
-    GATEWAY_ELECTION_SETTLE_SECONDS, GATEWAY_FAILURE_THRESHOLD, RELAY_FAILURE_THRESHOLD,
+    GATEWAY_ELECTION_SETTLE_SECONDS, GATEWAY_FAILURE_THRESHOLD, POOR_RELAY_GATEWAY_TARGETS,
+    RELAY_FAILURE_THRESHOLD,
     RESTART_ESCALATION_RESET_AFTER, RESTART_RECOVERY_WINDOW, TANK_RESTART_LOCKOUT,
 )
 
@@ -184,6 +185,13 @@ class PanGroup:
     # gateway, and when (time.monotonic()); None before the first read.
     mesh_serials: Optional[set[str]] = None
     mesh_read_at: Optional[float] = None
+    # Relayed polls through the current gateway (reset on every gateway
+    # assignment): whether any succeeded, and which targets failed. A
+    # gateway through which no relayed poll succeeds while
+    # POOR_RELAY_GATEWAY_TARGETS different targets fail is replaced (see
+    # record_relayed_poll_failure()).
+    relay_succeeded_via_gateway: bool = False
+    relay_failed_targets: set[str] = field(default_factory=set)
     _electing: bool = False
     _gateway_elected: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -367,6 +375,8 @@ class GatewayRegistry:
         # the new route.
         for member in group.members.values():
             member.consecutive_relay_failures = 0
+        group.relay_succeeded_via_gateway = False
+        group.relay_failed_targets = set()
         group.gateway_connection = (
             MobiusConnectionManager(self.hass, serial, self.semaphore)
             if serial is not None else None
@@ -646,7 +656,38 @@ class GatewayRegistry:
                     target_serial, group.gateway_serial, pan_id, member.consecutive_relay_failures,
                 )
             member.consecutive_relay_failures = 0
+            group.relay_succeeded_via_gateway = True
             self._maybe_end_restart_episode(group, now or dt_util.utcnow())
+
+    async def record_relayed_poll_failure(
+        self, pan_id: int, target_serial: str, expected_generation: int,
+    ) -> bool:
+        """Records a failed relayed poll of `target_serial` through a connected
+        gateway. When no relayed poll has succeeded through the current gateway
+        and POOR_RELAY_GATEWAY_TARGETS different targets have failed, the
+        gateway itself is the likely problem (a poor mesh link, or a device
+        that can't relay well -- one that doesn't even serve the mesh peer
+        list, for example), so it is replaced like a failed gateway. A
+        gateway through which any target succeeds is kept: then the failing
+        targets are the problem. Returns whether the gateway was replaced.
+        """
+        group = self._groups.get(pan_id)
+        if group is None:
+            return False
+        async with group.lock:
+            if group.generation != expected_generation or group.relay_succeeded_via_gateway:
+                return False
+            group.relay_failed_targets.add(target_serial)
+            relayed_members = len(group.members) - (1 if group.gateway_serial in group.members else 0)
+            needed = min(POOR_RELAY_GATEWAY_TARGETS, relayed_members)
+            if needed < 2 or len(group.relay_failed_targets) < needed:
+                return False
+            await self._promote_away_from_current_gateway(
+                group,
+                f"relayed no poll successfully while {len(group.relay_failed_targets)} member(s) "
+                f"failed through it ({', '.join(sorted(group.relay_failed_targets))})",
+            )
+            return True
 
     def update_mesh_address(self, pan_id: int, serial: str, address: bytes) -> None:
         """Stores a member's mesh-local address. Does nothing for an unknown group

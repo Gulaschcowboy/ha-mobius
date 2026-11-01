@@ -1405,6 +1405,11 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     _LOGGER.debug(
                         "%s: not counting this failure -- gateway %r isn't connected", self.serial, group.gateway_serial,
                     )
+                elif await self.registry.record_relayed_poll_failure(self.pan_id, self.serial, expected_generation):
+                    # No relayed poll got through this gateway, but several
+                    # members failed: the gateway was replaced and the failure
+                    # isn't counted against this device.
+                    pass
                 elif await self._answers_small_read(group):
                     # Reachable: the poll failed for another reason (a reply
                     # too large to relay, for example), which a restart can't
