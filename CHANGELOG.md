@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.5b13 (fork Gulaschcowboy/ha-mobius, test build)
+
+- Automatic device restarts are disabled by default (RestartPolicy.enabled=False). A member that fails RELAY_FAILURE_THRESHOLD relayed reads now only switches the gateway; no device, and never the whole tank, is restarted. Restarting a dosing pump can cost it its dose, and restarting the return pump overfills the sump. Manual reboot buttons are unchanged.
+
 ## 0.10.5b12 (fork Gulaschcowboy/ha-mobius, test build)
 
 - A member that reaches the relay failure threshold through the current gateway, but was polled through another gateway earlier, is no longer restarted: the route is the likely problem, not the member. It is recorded as unpollable via the current gateway, and the gateway is replaced by one known (or not yet known) to fail fewer members. Without such a gateway, the current one is kept and nothing is restarted.

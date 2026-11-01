@@ -35,6 +35,10 @@ group with no other member is left without a gateway.
 
 ## Automatic restarts
 
+Disabled by default in this fork (see RestartPolicy): RELAY_FAILURE_THRESHOLD
+then switches the gateway instead, and nothing is restarted. With them
+enabled:
+
 A target that fails RELAY_FAILURE_THRESHOLD consecutive relayed reads while
 the gateway works is restarted rather than switching gateway, escalating
 within an episode:
@@ -107,8 +111,13 @@ def _log_address(address: Optional[bytes]) -> str:
 class RestartPolicy:
     """Automatic restart settings of one PanGroup (see "Automatic restarts"
     in the module docstring). enabled=False keeps the gateway switch on
-    RELAY_FAILURE_THRESHOLD instead."""
-    enabled: bool = True
+    RELAY_FAILURE_THRESHOLD instead.
+
+    Disabled by default in this fork: restarting a dosing pump can cost it
+    its dose, and restarting the return pump overfills the sump until it
+    runs again (the skimmer overflows) -- a polling problem must never do
+    that. Keep it until discussed with upstream."""
+    enabled: bool = False
     recovery_window: timedelta = RESTART_RECOVERY_WINDOW
     escalation_reset_after: timedelta = RESTART_ESCALATION_RESET_AFTER
     tank_restart_lockout: timedelta = TANK_RESTART_LOCKOUT
