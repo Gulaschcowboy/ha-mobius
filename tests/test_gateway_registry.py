@@ -465,12 +465,22 @@ async def _fail_relay_times(registry, pan_id, target_serial, times, now):
 
 
 class TestAutomaticRestarts:
+    @pytest.mark.asyncio
+    async def test_restarts_are_disabled_by_default(self, registry):
+        for serial in ("gw", "pump1"):
+            await registry.join(PAN_A, serial, rssi=-50)
+        registry.group(PAN_A).gateway_serial = "gw"
+        assert not registry.group(PAN_A).restart_policy.enabled
+        assert await _fail_relay_times(registry, PAN_A, "pump1", RELAY_FAILURE_THRESHOLD, T0) is None
+
     @pytest.fixture
     async def tank(self, registry):
         for serial, rssi in (("gw", -80), ("pump1", -50), ("pump2", -50), ("light", -85)):
             await registry.join(PAN_A, serial, rssi=rssi)
         group = registry.group(PAN_A)
         group.gateway_serial = "gw"
+        # Automatic restarts are opt-in in this fork.
+        group.restart_policy = RestartPolicy(enabled=True)
         return group
 
     @pytest.mark.asyncio
@@ -886,6 +896,7 @@ class TestLocalTimeInLogs:
         await registry.join(PAN_A, "pump", rssi=-50)
         group = registry.group(PAN_A)
         group.gateway_serial = "gw"
+        group.restart_policy = RestartPolicy(enabled=True)
         group.restarted_individually.add("pump")
         group.restart_step = 3
         group.restart_lockout_until = T0 + TANK_RESTART_LOCKOUT
