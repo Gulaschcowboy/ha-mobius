@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.5b11 (fork Gulaschcowboy/ha-mobius, test build)
+
+- Mesh routes differ per gateway: a member that answers small reads but cannot be polled through the current gateway (3 polls in a row with batching already disabled, UNPOLLABLE_VIA_GATEWAY_POLLS) is recorded as unpollable via that gateway. The gateway is then replaced by a member known (or not yet known) to fail fewer members. Failures per gateway only grow until a relayed success clears them, so this settles on the gateway covering the most members instead of flapping.
+- The b10 poor-relay replacement records its failed targets the same way.
+
 ## 0.10.5b10 (fork Gulaschcowboy/ha-mobius, test build)
 
 - A gateway through which no relayed poll succeeds while 3 different members fail (POOR_RELAY_GATEWAY_TARGETS) is now replaced like a failed gateway. The BLE-RSSI election can pick a device that relays poorly (here a Nero that does not even serve the mesh peer list), which left every other device unavailable while the gateway itself polled fine.

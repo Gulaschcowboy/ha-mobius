@@ -53,6 +53,12 @@ RELAY_FAILURE_THRESHOLD = 3
 # members fail is replaced (GatewayRegistry.record_relayed_poll_failure()).
 POOR_RELAY_GATEWAY_TARGETS = 3
 
+# A member that answers a small read through the gateway but whose poll
+# (with batching already disabled) fails this many times in a row is
+# recorded as not pollable via that gateway; the gateway is then replaced
+# by one known to fail fewer members (GatewayRegistry.record_unpollable_via_gateway()).
+UNPOLLABLE_VIA_GATEWAY_POLLS = 3
+
 # A relayed poll that fails is followed by a small read of the same device
 # (its Model) with this timeout per send. When that answers, the device is
 # reachable and the failure is not counted towards RELAY_FAILURE_THRESHOLD:

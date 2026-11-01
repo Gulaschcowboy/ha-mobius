@@ -65,7 +65,7 @@ from bleak.exc import BleakCharacteristicNotFoundError
 from bleak_retry_connector import clear_cache as clear_bluez_service_cache
 
 from .const import (
-    ADVERTISEMENT_MAX_AGE, BATCH_FAILURE_THRESHOLD, CONNECT_TIMEOUT, DOMAIN, GATEWAY_GONE_AFTER,
+    ADVERTISEMENT_MAX_AGE, BATCH_FAILURE_THRESHOLD, UNPOLLABLE_VIA_GATEWAY_POLLS, CONNECT_TIMEOUT, DOMAIN, GATEWAY_GONE_AFTER,
     MARK_UNAVAILABLE_AFTER, MESH_LIST_FRESH_FOR_FAILURES, POLL_INTERVAL, RELAY_PROBE_TIMEOUT,
     STATIC_REFRESH_INTERVAL, ATTRIBUTE_TABLE_RETRY_DELAYS,
 )
@@ -976,6 +976,10 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # A failed poll was followed by a small read that answered (see
         # _answers_small_read()); logged once per streak of such polls.
         self._reachable_but_poll_failing = False
+        # Consecutive such polls with batching disabled, through the same
+        # gateway (see GatewayRegistry.record_unpollable_via_gateway()).
+        self._unpollable_polls = 0
+        self._unpollable_generation: Optional[int] = None
         # Powered off or gone: not polled until seen again (see
         # _is_absent()).
         self.absent = False
@@ -1429,6 +1433,19 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     # poll goes straight to individual reads.
                     if not self._batch_disabled:
                         self._record_batch_result(False)
+                    else:
+                        # Batching is off and individual reads fail too: this
+                        # gateway's mesh route to the device may be the
+                        # problem, which another gateway may not have.
+                        if self._unpollable_generation != expected_generation:
+                            self._unpollable_polls = 0
+                            self._unpollable_generation = expected_generation
+                        self._unpollable_polls += 1
+                        if self._unpollable_polls >= UNPOLLABLE_VIA_GATEWAY_POLLS:
+                            self._unpollable_polls = 0
+                            await self.registry.record_unpollable_via_gateway(
+                                self.pan_id, self.serial, expected_generation,
+                            )
                 elif not self._failure_counts(group):
                     _LOGGER.debug(
                         "%s isn't advertising and the mesh peer list is too old to tell whether it's "
@@ -1448,6 +1465,7 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                 raise
         self._reachable_but_poll_failing = False
+        self._unpollable_polls = 0
 
         # Written to the registry by the tank check (__init__.py's
         # _async_revalidate_tank(), every MESH_PEER_REFRESH_INTERVAL).

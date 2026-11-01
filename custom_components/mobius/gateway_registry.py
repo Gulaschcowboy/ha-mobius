@@ -192,6 +192,11 @@ class PanGroup:
     # record_relayed_poll_failure()).
     relay_succeeded_via_gateway: bool = False
     relay_failed_targets: set[str] = field(default_factory=set)
+    # Per gateway serial, the members that couldn't be polled through it
+    # (kept across gateway changes for the lifetime of the integration; a
+    # later relayed success removes the entry). Used to move to a gateway
+    # that covers more members (see record_unpollable_via_gateway()).
+    unpollable_via: dict[str, set[str]] = field(default_factory=dict)
     _electing: bool = False
     _gateway_elected: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -424,7 +429,9 @@ class GatewayRegistry:
                 )
             group.consecutive_gateway_failures = 0
 
-    async def _promote_away_from_current_gateway(self, group: PanGroup, reason: str) -> Optional[str]:
+    async def _promote_away_from_current_gateway(
+        self, group: PanGroup, reason: str, avoid: Optional[set[str]] = None,
+    ) -> Optional[str]:
         """Replaces the current gateway (adding it to recently_failed_gateways) with
         the best candidate that hasn't failed this round, and disconnects the old
         connection. When every member has failed, a new round starts that
@@ -436,7 +443,10 @@ class GatewayRegistry:
         if failing_serial is not None:
             group.recently_failed_gateways.add(failing_serial)
 
-        new_gateway = self._best_candidate(group, exclude_serials=group.recently_failed_gateways)
+        avoid = avoid or set()
+        new_gateway = self._best_candidate(group, exclude_serials=group.recently_failed_gateways | avoid)
+        if new_gateway is None and avoid:
+            new_gateway = self._best_candidate(group, exclude_serials={failing_serial} | avoid)
         if new_gateway is None:
             _LOGGER.debug(
                 "Every member of pan_id %#06x has now failed since the last success -- "
@@ -657,6 +667,14 @@ class GatewayRegistry:
                 )
             member.consecutive_relay_failures = 0
             group.relay_succeeded_via_gateway = True
+            if group.gateway_serial is not None:
+                bad = group.unpollable_via.get(group.gateway_serial)
+                if bad and target_serial in bad:
+                    bad.discard(target_serial)
+                    _LOGGER.info(
+                        "%s polled through gateway %r again -- no longer recorded as unpollable via it",
+                        target_serial, group.gateway_serial,
+                    )
             self._maybe_end_restart_episode(group, now or dt_util.utcnow())
 
     async def record_relayed_poll_failure(
@@ -682,10 +700,63 @@ class GatewayRegistry:
             needed = min(POOR_RELAY_GATEWAY_TARGETS, relayed_members)
             if needed < 2 or len(group.relay_failed_targets) < needed:
                 return False
+            if group.gateway_serial is not None:
+                group.unpollable_via.setdefault(group.gateway_serial, set()).update(group.relay_failed_targets)
             await self._promote_away_from_current_gateway(
                 group,
                 f"relayed no poll successfully while {len(group.relay_failed_targets)} member(s) "
                 f"failed through it ({', '.join(sorted(group.relay_failed_targets))})",
+            )
+            return True
+
+    def _covers_no_better(self, group: PanGroup, current: str) -> set[str]:
+        """Members known to fail at least as many members as gateway as
+        `current` does (always including `current`)."""
+        current_bad = len(group.unpollable_via.get(current, ()))
+        return {current} | {
+            serial for serial in group.members
+            if serial != current and len(group.unpollable_via.get(serial, ())) >= current_bad
+        }
+
+    async def record_unpollable_via_gateway(
+        self, pan_id: int, target_serial: str, expected_generation: int,
+    ) -> bool:
+        """Records that `target_serial` answers small reads through the current
+        gateway, but can't be polled through it (UNPOLLABLE_VIA_GATEWAY_POLLS
+        failed polls in a row with batching disabled). Mesh routes differ per
+        gateway: a member that can't be polled through one gateway may be
+        through another. The gateway is replaced when some other member is
+        known (or not yet known) to fail fewer members as gateway; as the
+        failures per gateway only grow until a success, this settles on the
+        gateway that covers the most members. Returns whether it was replaced.
+        """
+        group = self._groups.get(pan_id)
+        if group is None:
+            return False
+        async with group.lock:
+            current = group.gateway_serial
+            if group.generation != expected_generation or current is None or current == target_serial:
+                return False
+            bad = group.unpollable_via.setdefault(current, set())
+            if target_serial not in bad:
+                bad.add(target_serial)
+                _LOGGER.warning(
+                    "%s can't be polled through gateway %r for pan_id %#06x (it answers small "
+                    "reads); members unpollable via it: %s",
+                    target_serial, current, pan_id, ", ".join(sorted(bad)),
+                )
+            avoid = self._covers_no_better(group, current)
+            if not set(group.members) - avoid:
+                _LOGGER.debug(
+                    "No member of pan_id %#06x is known to cover more members than gateway %r -- keeping it",
+                    pan_id, current,
+                )
+                return False
+            others = ", ".join(f"{g}: {len(s)}" for g, s in sorted(group.unpollable_via.items()) if g != current)
+            await self._promote_away_from_current_gateway(
+                group,
+                f"can't poll {', '.join(sorted(bad))} (members unpollable via other gateways: {others or 'none known'})",
+                avoid=avoid,
             )
             return True
 
