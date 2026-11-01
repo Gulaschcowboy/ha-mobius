@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.5b8 (fork Gulaschcowboy/ha-mobius, test build)
+
+- Devices on the same tank (pan_id) are polled one at a time. Several relayed polls running through the gateway at once made the gateway drop replies: four devices polling in the same second each timed out (2x5 s) every cycle and their values went stale/unavailable, while each answers in under a second when polled alone.
+
 ## 0.10.5b7 (fork Gulaschcowboy/ha-mobius, test build)
 
 - Attribute table retries are short again (30 s, 1 min, then every 2 min): relayed table reads often time out but succeed after a few tries, and the table is needed only once per device (it is stored). The 5/15/60 min waits of b6 kept relayed lights and pumps unavailable for an hour.

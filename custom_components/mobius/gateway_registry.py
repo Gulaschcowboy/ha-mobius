@@ -159,6 +159,9 @@ class PanGroup:
     gateway_connection: Optional["MobiusConnectionManager"] = None
     members: dict[str, MemberState] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Serializes the polls (gateway and relayed) of this pan_id; see
+    # MobiusCoordinator._fetch().
+    poll_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # Consecutive failed reads of the current gateway; reset when the
     # gateway changes.
     consecutive_gateway_failures: int = 0

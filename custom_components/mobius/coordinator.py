@@ -1335,99 +1335,104 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.debug(
             "%s polling as %s", self.serial, "gateway" if is_gateway else "relayed",
         )
-        try:
-            device = await self.async_get_connected_device()
-            await self._ensure_supported_attribute_ids(device)
-            data, self._supported_attribute_ids, used_batch, self._primitive_type, self._model = await _fetch_all(
-                device, cached_supported_attribute_ids=self._supported_attribute_ids,
-                batch_disabled=self._batch_disabled,
-                cached_primitive_type=self._primitive_type, cached_model=self._model, group=group,
-                configuration_cache=self.configuration_cache,
-            )
-            self._forget_stored_table_if_changed()
-            self._record_batch_result(used_batch)
-            self.registry.update_radio_type(
-                self.pan_id, self.serial, (data.get("hardware_info") or {}).get("RadioType"),
-            )
-            if is_gateway:
-                self.registry.record_gateway_success(self.pan_id)
-            else:
-                self.registry.record_relay_success(self.pan_id, self.serial)
+        # One mesh poll at a time per pan_id: the gateway drops relayed
+        # replies when several polls run through it at once (seen with four
+        # devices polling in the same second: every one timed out after
+        # 2x5 s, while the same devices answer in <1 s when polled alone).
+        async with group.poll_lock:
+            try:
+                device = await self.async_get_connected_device()
+                await self._ensure_supported_attribute_ids(device)
+                data, self._supported_attribute_ids, used_batch, self._primitive_type, self._model = await _fetch_all(
+                    device, cached_supported_attribute_ids=self._supported_attribute_ids,
+                    batch_disabled=self._batch_disabled,
+                    cached_primitive_type=self._primitive_type, cached_model=self._model, group=group,
+                    configuration_cache=self.configuration_cache,
+                )
+                self._forget_stored_table_if_changed()
+                self._record_batch_result(used_batch)
+                self.registry.update_radio_type(
+                    self.pan_id, self.serial, (data.get("hardware_info") or {}).get("RadioType"),
+                )
+                if is_gateway:
+                    self.registry.record_gateway_success(self.pan_id)
+                else:
+                    self.registry.record_relay_success(self.pan_id, self.serial)
 
-            if self._primitive_type == PrimitiveType.VectraV1 and self._closed_loop is None:
-                vectra_info = await device.get_vectra_info()  # None when unavailable
-                if vectra_info is not None:
-                    self._closed_loop = vectra_info.closed_loop
-            data["closed_loop"] = self._closed_loop
-            if is_bluetooth_only(self._model):
-                # Read over the gateway connection, i.e. this device was
-                # the gateway: switch now (the data itself is fine).
-                await self._check_bluetooth_only()
-                data["mesh_last_seen_at"] = None
-                return data
-        except AttributeTableUnavailable:
-            # Not a connection failure: the gateway and relay counters (and
-            # the restarts they trigger) are left alone.
-            raise
-        except Exception as err:
-            _LOGGER.debug(
-                "%s poll (%s) failed: %s", self.serial,
-                "gateway" if is_gateway else "relayed", err,
-            )
-            if group.generation != expected_generation:
-                # The gateway changed while this fetch was in flight: the
-                # failure says nothing about the current gateway, and
-                # group.gateway_connection is now a different connection, so
-                # neither is touched.
+                if self._primitive_type == PrimitiveType.VectraV1 and self._closed_loop is None:
+                    vectra_info = await device.get_vectra_info()  # None when unavailable
+                    if vectra_info is not None:
+                        self._closed_loop = vectra_info.closed_loop
+                data["closed_loop"] = self._closed_loop
+                if is_bluetooth_only(self._model):
+                    # Read over the gateway connection, i.e. this device was
+                    # the gateway: switch now (the data itself is fine).
+                    await self._check_bluetooth_only()
+                    data["mesh_last_seen_at"] = None
+                    return data
+            except AttributeTableUnavailable:
+                # Not a connection failure: the gateway and relay counters (and
+                # the restarts they trigger) are left alone.
+                raise
+            except Exception as err:
                 _LOGGER.debug(
-                    "%s's own fetch started under generation %d, but pan_id %#06x is "
-                    "now on generation %d -- not recording this failure against the "
-                    "current gateway.",
-                    self.serial, expected_generation, self.pan_id, group.generation,
+                    "%s poll (%s) failed: %s", self.serial,
+                    "gateway" if is_gateway else "relayed", err,
                 )
-            elif is_gateway:
-                # The connection may have dropped after ensure_connected()
-                # succeeded; force a reconnect on the next poll.
-                group.gateway_connection.mark_disconnected()
-                gone = (
-                    isinstance(err, DeviceNotAdvertising)
-                    and group.gateway_connection.lost_for() >= GATEWAY_GONE_AFTER.total_seconds()
-                )
-                await self.registry.record_gateway_failure(self.pan_id, expected_generation, gone=gone)
-            elif isinstance(err, (GatewayReplaced, GatewayDown)) or not group.gateway_connection.is_connected:
-                # The gateway connection failed, not the relay to this
-                # device: the gateway's own poll deals with that.
-                _LOGGER.debug(
-                    "%s: not counting this failure -- gateway %r isn't connected", self.serial, group.gateway_serial,
-                )
-            elif await self._answers_small_read(group):
-                # Reachable: the poll failed for another reason (a reply
-                # too large to relay, for example), which a restart can't
-                # fix, so it isn't counted.
-                log = _LOGGER.debug if self._reachable_but_poll_failing else _LOGGER.warning
-                log(
-                    "%s answers a small read through gateway %r, but its poll failed (%s) -- "
-                    "not counting it as unreachable", self.serial, group.gateway_serial, err,
-                )
-                self._reachable_but_poll_failing = True
-            elif not self._failure_counts(group):
-                _LOGGER.debug(
-                    "%s isn't advertising and the mesh peer list is too old to tell whether it's "
-                    "still on the mesh -- not counting this failure; reading the peer list at the "
-                    "next tank check", self.serial,
-                )
-                self._request_mesh_peer_read()
-            else:
-                # May be specific to this target, so the shared connection is
-                # left alone; the failure counts towards
-                # RELAY_FAILURE_THRESHOLD for this target.
-                action = await self.registry.record_relay_failure(self.pan_id, self.serial, expected_generation)
-                if action is not None:
-                    self.hass.async_create_background_task(
-                        async_run_restart(self.hass, self.registry, action),
-                        f"mobius automatic restart for pan_id {self.pan_id:#06x}",
+                if group.generation != expected_generation:
+                    # The gateway changed while this fetch was in flight: the
+                    # failure says nothing about the current gateway, and
+                    # group.gateway_connection is now a different connection, so
+                    # neither is touched.
+                    _LOGGER.debug(
+                        "%s's own fetch started under generation %d, but pan_id %#06x is "
+                        "now on generation %d -- not recording this failure against the "
+                        "current gateway.",
+                        self.serial, expected_generation, self.pan_id, group.generation,
                     )
-            raise
+                elif is_gateway:
+                    # The connection may have dropped after ensure_connected()
+                    # succeeded; force a reconnect on the next poll.
+                    group.gateway_connection.mark_disconnected()
+                    gone = (
+                        isinstance(err, DeviceNotAdvertising)
+                        and group.gateway_connection.lost_for() >= GATEWAY_GONE_AFTER.total_seconds()
+                    )
+                    await self.registry.record_gateway_failure(self.pan_id, expected_generation, gone=gone)
+                elif isinstance(err, (GatewayReplaced, GatewayDown)) or not group.gateway_connection.is_connected:
+                    # The gateway connection failed, not the relay to this
+                    # device: the gateway's own poll deals with that.
+                    _LOGGER.debug(
+                        "%s: not counting this failure -- gateway %r isn't connected", self.serial, group.gateway_serial,
+                    )
+                elif await self._answers_small_read(group):
+                    # Reachable: the poll failed for another reason (a reply
+                    # too large to relay, for example), which a restart can't
+                    # fix, so it isn't counted.
+                    log = _LOGGER.debug if self._reachable_but_poll_failing else _LOGGER.warning
+                    log(
+                        "%s answers a small read through gateway %r, but its poll failed (%s) -- "
+                        "not counting it as unreachable", self.serial, group.gateway_serial, err,
+                    )
+                    self._reachable_but_poll_failing = True
+                elif not self._failure_counts(group):
+                    _LOGGER.debug(
+                        "%s isn't advertising and the mesh peer list is too old to tell whether it's "
+                        "still on the mesh -- not counting this failure; reading the peer list at the "
+                        "next tank check", self.serial,
+                    )
+                    self._request_mesh_peer_read()
+                else:
+                    # May be specific to this target, so the shared connection is
+                    # left alone; the failure counts towards
+                    # RELAY_FAILURE_THRESHOLD for this target.
+                    action = await self.registry.record_relay_failure(self.pan_id, self.serial, expected_generation)
+                    if action is not None:
+                        self.hass.async_create_background_task(
+                            async_run_restart(self.hass, self.registry, action),
+                            f"mobius automatic restart for pan_id {self.pan_id:#06x}",
+                        )
+                raise
         self._reachable_but_poll_failing = False
 
         # Written to the registry by the tank check (__init__.py's
