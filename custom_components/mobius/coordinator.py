@@ -1415,6 +1415,15 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         "not counting it as unreachable", self.serial, group.gateway_serial, err,
                     )
                     self._reachable_but_poll_failing = True
+                    # The usual "too large" reply is the batched read: its
+                    # timeout marks the relayed instance unreachable, so the
+                    # individual-reads fallback fails in the same cycle and
+                    # _record_batch_result() (called on success only) never
+                    # counts it. Count it here, so batching gets disabled
+                    # after BATCH_FAILURE_THRESHOLD such polls and the next
+                    # poll goes straight to individual reads.
+                    if not self._batch_disabled:
+                        self._record_batch_result(False)
                 elif not self._failure_counts(group):
                     _LOGGER.debug(
                         "%s isn't advertising and the mesh peer list is too old to tell whether it's "
