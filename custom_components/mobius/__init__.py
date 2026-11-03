@@ -321,7 +321,21 @@ async def _async_revalidate_tank(hass: HomeAssistant, entry: ConfigEntry, now=No
     read_at = time.monotonic()
     if runtime is not None:
         runtime.last_mesh_refresh = read_at
-    registry.update_mesh_peers(pan_id, {p.serial for p in peers}, read_at)
+    registry.update_mesh_peers(
+        pan_id, {p.serial for p in peers}, read_at,
+        read_via=gateway_serial, ages={p.serial: p.age for p in peers},
+    )
+    # Diagnostic (test build): who the gateway hears on the mesh, and since
+    # when; known members missing from the list are named too.
+    listed = ", ".join(
+        f"{p.serial} ({p.age / 1000:.0f}s)" if p.age is not None else f"{p.serial} (age ?)"
+        for p in sorted(peers, key=lambda p: p.serial)
+    )
+    missing = sorted({d[CONF_SERIAL] for d in known_devices} - {p.serial for p in peers} - {gateway_serial})
+    _LOGGER.info(
+        "Tank %r mesh peers heard by gateway %r: %s; known members not listed: %s",
+        entry.title, gateway_serial, listed or "none", ", ".join(missing) or "none",
+    )
 
     known_serials = {d[CONF_SERIAL] for d in known_devices}
     now_utc = dt_util.utcnow()

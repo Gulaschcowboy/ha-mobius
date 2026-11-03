@@ -65,8 +65,8 @@
       "hardware_revision": {
         "name": "Hardware revision"
       },
-      "thread_topology": {
-        "name": "Thread topology"
+      "thread_network": {
+        "name": "Thread network"
       },
       "mesh_address": {
         "name": "Mesh address"

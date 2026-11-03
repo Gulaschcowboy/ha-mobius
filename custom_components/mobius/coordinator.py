@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import time
 from dataclasses import asdict
@@ -934,6 +935,8 @@ class EmptyRelayedPoll(Exception):
 
 # How often the Thread role/RLOC16 of a device is re-read (two small reads).
 THREAD_TOPOLOGY_INTERVAL = 900.0
+# Upper bound for one Thread network diagnostic read (12 attributes).
+THREAD_NETWORK_READ_TIMEOUT = 30.0
 
 
 class AttributeTableUnavailable(Exception):
@@ -1377,7 +1380,7 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.registry.update_radio_type(
                     self.pan_id, self.serial, (data.get("hardware_info") or {}).get("RadioType"),
                 )
-                await self._maybe_read_thread_topology(device, group, is_gateway)
+                await self._maybe_read_thread_network(device, group, is_gateway)
                 if is_gateway:
                     self.registry.record_gateway_success(self.pan_id)
                 else:
@@ -1507,41 +1510,56 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             and self.serial in group.mesh_serials
         )
 
-    async def _maybe_read_thread_topology(self, device: Any, group: PanGroup, is_gateway: bool) -> None:
-        """Every THREAD_TOPOLOGY_INTERVAL, read this device's Thread short
-        address (RLOC16) and role, to see which router a device hangs off.
-        Diagnostic only: failures are ignored."""
+    async def _maybe_read_thread_network(self, device: Any, group: PanGroup, is_gateway: bool) -> None:
+        """Every THREAD_TOPOLOGY_INTERVAL, read this device's Thread network
+        state: whether it's attached, its role, the active channel/PAN/
+        network name and the configured ones, to compare devices that can't
+        reach each other. The extended PAN ID is only kept as a short hash;
+        the network key is never read. Diagnostic only: failures are ignored.
+        """
         now = time.monotonic()
         if self._thread_topology_read_at is not None and now - self._thread_topology_read_at < THREAD_TOPOLOGY_INTERVAL:
             return
         self._thread_topology_read_at = now
+        u = device._try_unpack
         try:
-            rloc16 = await device._try_unpack(C2Attribute.ShortAddress, "<H")
-            role_raw = await device._try_unpack(C2Attribute.DeviceRole, "<B")
+            # Bounded, so a slow relay can't hold up the poll for long.
+            async with asyncio.timeout(THREAD_NETWORK_READ_TIMEOUT):
+                values = {
+                    "connected": await device._try_bool(C2Attribute.IsDeviceConnected),
+                    "commissioned": await device._try_bool(C2Attribute.IsDeviceCommissioned),
+                    "role_raw": await u(C2Attribute.DeviceRole, "<B"),
+                    "channel": await u(C2Attribute.Channel, "<B"),
+                    "pan_id": await u(C2Attribute.PanID, "<H"),
+                    "network_name": await device._try_str(C2Attribute.NetworkName),
+                    "short_address_raw": await u(C2Attribute.ShortAddress, "<H"),
+                    "active_timestamp": await u(C2Attribute.MeshCopActiveTimestamp, "<Q"),
+                    "configured_channel": await u(C2Attribute.ConfiguredThreadChannel, "<B"),
+                    "configured_role_raw": await u(C2Attribute.ConfiguredThreadRole, "<B"),
+                    "configured_pan_id": await u(C2Attribute.ConfiguredThreadPANID, "<H"),
+                }
+                xpanid = await device._try_first(C2Attribute.ExtendedPanID)
         except Exception as err:  # noqa: BLE001 - diagnostic only
-            _LOGGER.debug("%s: Thread topology read failed: %s", self.serial, err)
+            _LOGGER.debug("%s: Thread network read failed: %s", self.serial, err)
             return
-        if rloc16 is None and role_raw is None:
-            _LOGGER.debug("%s: Thread topology read returned nothing", self.serial)
+        if all(v is None for v in values.values()) and xpanid is None:
+            _LOGGER.debug("%s: Thread network read returned nothing", self.serial)
             return
-        topology: dict[str, Any] = {
-            "rloc16": None if rloc16 is None else f"{rloc16:#06x}",
-            "role_raw": role_raw,
+        for key in ("pan_id", "configured_pan_id", "short_address_raw"):
+            if values[key] is not None:
+                values[key] = f"{values[key]:#06x}"
+        values["xpanid_hash"] = (
+            None if xpanid is None else hashlib.sha256(bytes(xpanid)).hexdigest()[:8]
+        )
+        network: dict[str, Any] = values | {
             "read_via_gateway": group.gateway_serial,
             "read_as_gateway": is_gateway,
             "read_at": dt_util.utcnow().isoformat(),
         }
-        if rloc16 is not None:
-            router_id, child_id = rloc16 >> 10, rloc16 & 0x1FF
-            topology.update(
-                router_id=router_id,
-                child_id=child_id,
-                kind="router" if child_id == 0 else "child",
-                parent_rloc16=f"{router_id << 10:#06x}",
-            )
-        if topology != (self.thread_topology or {}) | {"read_at": topology["read_at"]}:
-            _LOGGER.info("%s Thread topology: %s", self.serial, topology)
-        self.thread_topology = topology
+        unchanged = {k: v for k, v in (self.thread_topology or {}).items() if k != "read_at"}
+        if unchanged != {k: v for k, v in network.items() if k != "read_at"}:
+            _LOGGER.info("%s Thread network: %s", self.serial, network)
+        self.thread_topology = network
 
     async def _answers_small_read(self, group: PanGroup) -> bool:
         """Whether this relayed device answers a small read (its Model)

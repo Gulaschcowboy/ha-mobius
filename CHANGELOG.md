@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.5b15 (fork Gulaschcowboy/ha-mobius, test build)
+
+- A member the gateway repeatedly fails to relay to is no longer promoted to gateway itself (it is likely cut off from the other members too).
+- The "Thread topology" sensor (meaningless: mesh addresses are ML-EIDs, not RLOC16s) is replaced by a "Thread network" diagnostic sensor: connected / not connected / not commissioned, with role, channel, PAN ID, network name, short address, active timestamp, the configured channel/role/PAN ID and a short hash of the extended PAN ID as attributes. Read every 15 min, bounded to 30 s; the network key is not read.
+- The "Mesh address" sensor shows whether the last mesh peer list lists the device, through which gateway it was read and the peer's age; it stays available while the device's polls fail.
+- Each mesh peer list read is logged at INFO (peers with age, known members missing).
+
 ## 0.10.5b14 (fork Gulaschcowboy/ha-mobius, test build)
 
 - A relayed poll in which every read timed out (no model, no serial) is no longer counted as a successful poll. It now counts as a relayed failure, so a device that is unreachable through the current gateway (here the Vectra) takes part in the gateway rotation instead of being reported as polled with empty data.

@@ -194,6 +194,10 @@ class PanGroup:
     # gateway, and when (time.monotonic()); None before the first read.
     mesh_serials: Optional[set[str]] = None
     mesh_read_at: Optional[float] = None
+    # Gateway the last peer list was read through, and each listed peer's
+    # age (ms since that gateway last heard from it). Diagnostic only.
+    mesh_read_via: Optional[str] = None
+    mesh_peer_ages: dict[str, Optional[int]] = field(default_factory=dict)
     # Relayed polls through the current gateway (reset on every gateway
     # assignment): whether any succeeded, and which targets failed. A
     # gateway through which no relayed poll succeeds while
@@ -371,12 +375,18 @@ class GatewayRegistry:
             return False
         return self._absent(group, serial, is_advertising(self.hass, serial))
 
-    def update_mesh_peers(self, pan_id: int, serials: set[str], read_at: float) -> None:
-        """Stores the serials of a mesh peer list read successfully."""
+    def update_mesh_peers(
+        self, pan_id: int, serials: set[str], read_at: float,
+        read_via: Optional[str] = None, ages: Optional[dict[str, Optional[int]]] = None,
+    ) -> None:
+        """Stores the serials of a mesh peer list read successfully, the
+        gateway it was read through and the peers' ages (diagnostic)."""
         group = self._groups.get(pan_id)
         if group is not None:
             group.mesh_serials = set(serials)
             group.mesh_read_at = read_at
+            group.mesh_read_via = read_via
+            group.mesh_peer_ages = dict(ages or {})
 
     def _assign_gateway(self, group: PanGroup, serial: Optional[str]) -> None:
         """Makes `serial` the gateway (None clears it), with a new connection
@@ -623,8 +633,12 @@ class GatewayRegistry:
             if group.restart_policy.enabled:
                 return self._next_restart(group, target_serial, now)
 
+            # The target itself is avoided: a member the gateway can't reach
+            # over the mesh is likely cut off from the others too, so as
+            # gateway it would reach no one (seen with a VectraS2).
             await self._promote_away_from_current_gateway(
                 group, f"failed to relay to {target_serial!r} {RELAY_FAILURE_THRESHOLD} consecutive times",
+                avoid={target_serial},
             )
             for other_member in group.members.values():
                 other_member.consecutive_relay_failures = 0

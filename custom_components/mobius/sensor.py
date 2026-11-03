@@ -369,30 +369,35 @@ class HardwareRevisionSensor(MobiusEntity):
         return (self.coordinator.data or {}).get("hardware_info") or {}
 
 
-class ThreadTopologySensor(MobiusEntity):
-    """Thread RLOC16 of the device (read every THREAD_TOPOLOGY_INTERVAL);
-    the attributes tell router/child and the parent router. Diagnostic."""
+class ThreadNetworkSensor(MobiusEntity):
+    """The device's Thread network state (read every THREAD_TOPOLOGY_INTERVAL):
+    connected / not connected / not commissioned; channel, PAN, role and the
+    configured values as attributes. Diagnostic."""
 
     def __init__(self, coordinator, serial, device_info):
         super().__init__(
-            coordinator, serial, "thread_topology",
+            coordinator, serial, "thread_network",
             SensorEntityDescription(
-                key="thread_topology", translation_key="thread_topology", icon="mdi:graph-outline",
+                key="thread_network", translation_key="thread_network", icon="mdi:graph-outline",
             ),
             device_info, diagnostic=True,
         )
 
     @property
     def native_value(self):
-        topology = self.coordinator.thread_topology
-        return None if topology is None else topology.get("rloc16")
+        network = self.coordinator.thread_topology
+        if network is None:
+            return None
+        if network.get("commissioned") is False:
+            return "not commissioned"
+        connected = network.get("connected")
+        if connected is None:
+            return "unknown"
+        return "connected" if connected else "not connected"
 
     @property
     def extra_state_attributes(self):
-        topology = self.coordinator.thread_topology
-        if topology is None:
-            return None
-        return {k: v for k, v in topology.items() if k != "rloc16"}
+        return self.coordinator.thread_topology
 
 
 class MeshAddressSensor(MobiusEntity):
@@ -425,9 +430,26 @@ class MeshAddressSensor(MobiusEntity):
         # then updates the tank's entities), not by this device's poll.
         group = self.coordinator.registry.group(self.coordinator.pan_id)
         member = group.members.get(self.coordinator.serial) if group is not None else None
-        if member is None or member.mesh_last_seen_at is None:
+        if member is None:
             return {}
-        return {"last_seen": member.mesh_last_seen_at}
+        attrs: dict = {}
+        if member.mesh_last_seen_at is not None:
+            attrs["last_seen"] = member.mesh_last_seen_at
+        # Whether the last peer list read lists this device, and through
+        # which gateway (diagnostic: who hears whom on the mesh).
+        if group.mesh_serials is not None:
+            serial = self.coordinator.serial
+            attrs["peer_list_read_via"] = group.mesh_read_via
+            attrs["in_peer_list"] = serial in group.mesh_serials or serial == group.mesh_read_via
+            age = group.mesh_peer_ages.get(serial)
+            attrs["peer_age_s"] = None if age is None else round(age / 1000)
+        return attrs
+
+    @property
+    def available(self) -> bool:
+        # From the registry, so also shown while this device's polls fail.
+        group = self.coordinator.registry.group(self.coordinator.pan_id)
+        return group is not None and self.coordinator.serial in group.members
 
 
 class MeshPrefixSensor(SensorEntity):
@@ -727,7 +749,7 @@ async def async_setup_entry(
         # A Bluetooth-only device has no mesh address.
         if not coordinator.bluetooth_only:
             entities.append(MeshAddressSensor(coordinator, serial, device_info))
-            entities.append(ThreadTopologySensor(coordinator, serial, device_info))
+            entities.append(ThreadNetworkSensor(coordinator, serial, device_info))
         # Devices without scene support report no slots at all.
         if data.get("configured_scenes"):
             entities.append(ConfiguredScenesSensor(coordinator, serial, device_info))

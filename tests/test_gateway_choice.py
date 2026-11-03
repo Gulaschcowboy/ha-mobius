@@ -1,6 +1,7 @@
 """Replacement-gateway choice: prefer members known to cover the most members,
 rank members that failed as gateway themselves worst."""
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 from custom_components.mobius.gateway_registry import GatewayRegistry, PanGroup
 
@@ -36,3 +37,26 @@ def test_covers_no_better_counts_failed_as_gateway():
     group.failed_as_gateway.add("c")
     registry = GatewayRegistry.__new__(GatewayRegistry)
     assert registry._covers_no_better(group, "a") == {"a", "c"}
+
+
+def test_unreachable_target_not_promoted_itself():
+    """A member the gateway can't relay to is avoided as the next gateway."""
+    group = _group("gw", "target", "other")
+    group.gateway_serial = "gw"
+    group.generation = 0
+    group.lock = asyncio.Lock()
+    group.restart_policy = MagicMock(enabled=False)
+    for member in group.members.values():
+        member.consecutive_relay_failures = 0
+        member.is_recovering = MagicMock(return_value=False)
+    registry = GatewayRegistry.__new__(GatewayRegistry)
+    registry._groups = {1: group}
+    registry._promote_away_from_current_gateway = AsyncMock()
+
+    async def run():
+        for _ in range(3):
+            await registry.record_relay_failure(1, "target", 0)
+
+    asyncio.run(run())
+    registry._promote_away_from_current_gateway.assert_awaited_once()
+    assert registry._promote_away_from_current_gateway.await_args.kwargs["avoid"] == {"target"}
