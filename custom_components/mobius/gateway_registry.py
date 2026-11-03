@@ -208,6 +208,11 @@ class PanGroup:
     unpollable_via: dict[str, set[str]] = field(default_factory=dict)
     # Per gateway serial, the members polled through it at least once.
     polled_via: dict[str, set[str]] = field(default_factory=dict)
+    # Members replaced as gateway because they failed as gateway themselves
+    # (unreachable over Bluetooth, for example). Ranked worst by _badness()
+    # until they succeed as gateway, so a member that can't even be
+    # connected to isn't promoted over and over.
+    failed_as_gateway: set[str] = field(default_factory=set)
     _electing: bool = False
     _gateway_elected: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -439,6 +444,8 @@ class GatewayRegistry:
                     group.gateway_serial, pan_id, group.consecutive_gateway_failures,
                 )
             group.consecutive_gateway_failures = 0
+            if group.gateway_serial is not None:
+                group.failed_as_gateway.discard(group.gateway_serial)
 
     async def _promote_away_from_current_gateway(
         self, group: PanGroup, reason: str, avoid: Optional[set[str]] = None,
@@ -455,7 +462,8 @@ class GatewayRegistry:
             group.recently_failed_gateways.add(failing_serial)
 
         avoid = avoid or set()
-        new_gateway = self._best_candidate(group, exclude_serials=group.recently_failed_gateways | avoid)
+        excluded = group.recently_failed_gateways | avoid
+        new_gateway = self._best_candidate(group, exclude_serials=excluded | self._worse_than_best(group, excluded))
         if new_gateway is None and avoid:
             new_gateway = self._best_candidate(group, exclude_serials={failing_serial} | avoid)
         if new_gateway is None:
@@ -512,6 +520,9 @@ class GatewayRegistry:
                 )
                 return False
             group.consecutive_gateway_failures += 1
+            if gone or group.consecutive_gateway_failures >= GATEWAY_FAILURE_THRESHOLD:
+                if group.gateway_serial is not None:
+                    group.failed_as_gateway.add(group.gateway_serial)
             if gone:
                 await self._promote_away_from_current_gateway(
                     group, "is disconnected and not advertising (powered off or out of range)",
@@ -755,13 +766,33 @@ class GatewayRegistry:
             )
             return True
 
+    @staticmethod
+    def _badness(group: PanGroup, serial: str) -> int:
+        """How many members `serial` is known to fail as gateway; a member
+        that failed as gateway itself (failed_as_gateway) counts as failing
+        all of them."""
+        if serial in group.failed_as_gateway:
+            return len(group.members)
+        return len(group.unpollable_via.get(serial, ()))
+
+    def _worse_than_best(self, group: PanGroup, excluded: set[str]) -> set[str]:
+        """Of the members not in `excluded`, those known to fail more members
+        as gateway than the best of them: a replacement gateway is only
+        picked among the best known, so the gateway settles on the one that
+        covers the most members instead of cycling through all of them."""
+        pool = [serial for serial in group.members if serial not in excluded]
+        if not pool:
+            return set()
+        best = min(self._badness(group, serial) for serial in pool)
+        return {serial for serial in pool if self._badness(group, serial) > best}
+
     def _covers_no_better(self, group: PanGroup, current: str) -> set[str]:
         """Members known to fail at least as many members as gateway as
         `current` does (always including `current`)."""
-        current_bad = len(group.unpollable_via.get(current, ()))
+        current_bad = self._badness(group, current)
         return {current} | {
             serial for serial in group.members
-            if serial != current and len(group.unpollable_via.get(serial, ())) >= current_bad
+            if serial != current and self._badness(group, serial) >= current_bad
         }
 
     async def record_unpollable_via_gateway(

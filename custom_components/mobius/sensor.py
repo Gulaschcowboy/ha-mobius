@@ -369,6 +369,32 @@ class HardwareRevisionSensor(MobiusEntity):
         return (self.coordinator.data or {}).get("hardware_info") or {}
 
 
+class ThreadTopologySensor(MobiusEntity):
+    """Thread RLOC16 of the device (read every THREAD_TOPOLOGY_INTERVAL);
+    the attributes tell router/child and the parent router. Diagnostic."""
+
+    def __init__(self, coordinator, serial, device_info):
+        super().__init__(
+            coordinator, serial, "thread_topology",
+            SensorEntityDescription(
+                key="thread_topology", translation_key="thread_topology", icon="mdi:graph-outline",
+            ),
+            device_info, diagnostic=True,
+        )
+
+    @property
+    def native_value(self):
+        topology = self.coordinator.thread_topology
+        return None if topology is None else topology.get("rloc16")
+
+    @property
+    def extra_state_attributes(self):
+        topology = self.coordinator.thread_topology
+        if topology is None:
+            return None
+        return {k: v for k, v in topology.items() if k != "rloc16"}
+
+
 class MeshAddressSensor(MobiusEntity):
     """The device's mesh-local IPv6 address, from the gateway registry (address
     discovery isn't part of the poll data). Unknown until discovered, which
@@ -701,6 +727,7 @@ async def async_setup_entry(
         # A Bluetooth-only device has no mesh address.
         if not coordinator.bluetooth_only:
             entities.append(MeshAddressSensor(coordinator, serial, device_info))
+            entities.append(ThreadTopologySensor(coordinator, serial, device_info))
         # Devices without scene support report no slots at all.
         if data.get("configured_scenes"):
             entities.append(ConfiguredScenesSensor(coordinator, serial, device_info))

@@ -928,6 +928,14 @@ async def _fetch_all(
     return info, supported_attribute_ids_to_cache, used_batch, primitive, model
 
 
+class EmptyRelayedPoll(Exception):
+    """A relayed poll returned no data at all."""
+
+
+# How often the Thread role/RLOC16 of a device is re-read (two small reads).
+THREAD_TOPOLOGY_INTERVAL = 900.0
+
+
 class AttributeTableUnavailable(Exception):
     """The supported attribute table isn't known yet and reading it failed
     recently: the device isn't polled until the next attempt."""
@@ -990,6 +998,9 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # once since get_vectra_info() takes three reads; a change is picked
         # up after a reload.
         self._closed_loop: Optional[bool] = None
+        # Thread topology (diagnostic): RLOC16, router/child, parent router.
+        self.thread_topology: Optional[dict[str, Any]] = None
+        self._thread_topology_read_at: Optional[float] = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -1353,11 +1364,20 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     cached_primitive_type=self._primitive_type, cached_model=self._model, group=group,
                     configuration_cache=self.configuration_cache,
                 )
+                if not is_gateway and data.get("model_raw") is None and data.get("serial") is None:
+                    # Every read timed out through the gateway (the relayed
+                    # instance gives up after the first timeout and returns
+                    # empty values): not a successful poll, and counting it as
+                    # one hid an unreachable device from the gateway rotation.
+                    raise EmptyRelayedPoll(
+                        f"{self.serial}: no attribute could be read through gateway {group.gateway_serial!r}"
+                    )
                 self._forget_stored_table_if_changed()
                 self._record_batch_result(used_batch)
                 self.registry.update_radio_type(
                     self.pan_id, self.serial, (data.get("hardware_info") or {}).get("RadioType"),
                 )
+                await self._maybe_read_thread_topology(device, group, is_gateway)
                 if is_gateway:
                     self.registry.record_gateway_success(self.pan_id)
                 else:
@@ -1486,6 +1506,42 @@ class MobiusDeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             and time.monotonic() - group.mesh_read_at < MESH_LIST_FRESH_FOR_FAILURES.total_seconds()
             and self.serial in group.mesh_serials
         )
+
+    async def _maybe_read_thread_topology(self, device: Any, group: PanGroup, is_gateway: bool) -> None:
+        """Every THREAD_TOPOLOGY_INTERVAL, read this device's Thread short
+        address (RLOC16) and role, to see which router a device hangs off.
+        Diagnostic only: failures are ignored."""
+        now = time.monotonic()
+        if self._thread_topology_read_at is not None and now - self._thread_topology_read_at < THREAD_TOPOLOGY_INTERVAL:
+            return
+        self._thread_topology_read_at = now
+        try:
+            rloc16 = await device._try_unpack(C2Attribute.ShortAddress, "<H")
+            role_raw = await device._try_unpack(C2Attribute.DeviceRole, "<B")
+        except Exception as err:  # noqa: BLE001 - diagnostic only
+            _LOGGER.debug("%s: Thread topology read failed: %s", self.serial, err)
+            return
+        if rloc16 is None and role_raw is None:
+            _LOGGER.debug("%s: Thread topology read returned nothing", self.serial)
+            return
+        topology: dict[str, Any] = {
+            "rloc16": None if rloc16 is None else f"{rloc16:#06x}",
+            "role_raw": role_raw,
+            "read_via_gateway": group.gateway_serial,
+            "read_as_gateway": is_gateway,
+            "read_at": dt_util.utcnow().isoformat(),
+        }
+        if rloc16 is not None:
+            router_id, child_id = rloc16 >> 10, rloc16 & 0x1FF
+            topology.update(
+                router_id=router_id,
+                child_id=child_id,
+                kind="router" if child_id == 0 else "child",
+                parent_rloc16=f"{router_id << 10:#06x}",
+            )
+        if topology != (self.thread_topology or {}) | {"read_at": topology["read_at"]}:
+            _LOGGER.info("%s Thread topology: %s", self.serial, topology)
+        self.thread_topology = topology
 
     async def _answers_small_read(self, group: PanGroup) -> bool:
         """Whether this relayed device answers a small read (its Model)

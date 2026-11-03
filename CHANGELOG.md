@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.5b14 (fork Gulaschcowboy/ha-mobius, test build)
+
+- A relayed poll in which every read timed out (no model, no serial) is no longer counted as a successful poll. It now counts as a relayed failure, so a device that is unreachable through the current gateway (here the Vectra) takes part in the gateway rotation instead of being reported as polled with empty data.
+- A member replaced as gateway because it failed as gateway itself (gone over Bluetooth or GATEWAY_FAILURE_THRESHOLD reached) is ranked as failing every member until it succeeds as gateway again; it is no longer promoted over and over.
+- Every gateway replacement now picks only among the members known to fail the fewest members (untried members count as failing none), so the gateway settles on the one covering the most members instead of cycling through all of them.
+- New diagnostic sensor "Thread topology": the device's Thread RLOC16 (read every 15 min), with router/child, router id, parent RLOC16 and the raw device role as attributes, to see which router each device hangs off.
+
 ## 0.10.5b13 (fork Gulaschcowboy/ha-mobius, test build)
 
 - Automatic device restarts are disabled by default (RestartPolicy.enabled=False). A member that fails RELAY_FAILURE_THRESHOLD relayed reads now only switches the gateway; no device, and never the whole tank, is restarted. Restarting a dosing pump can cost it its dose, and restarting the return pump overfills the sump. Manual reboot buttons are unchanged.
