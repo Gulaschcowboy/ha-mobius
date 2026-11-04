@@ -27,7 +27,7 @@ from custom_components.mobius.coordinator import (
     async_run_restart,
 )
 from custom_components.mobius.const import RELAY_FAILURE_THRESHOLD
-from custom_components.mobius.gateway_registry import GatewayRegistry, RestartAction
+from custom_components.mobius.gateway_registry import GatewayRegistry, RestartAction, RestartPolicy
 from homeassistant.exceptions import HomeAssistantError
 from mobius import PrimitiveType, Tank, MeshPeer, Model, MetadataSnapshot, SupportedAttribute, LightPollResult, LightIntensityResult, FullPollResult, Scene, ActiveScene, SceneID, VectraInfo, PumpParam
 from mobius.relay import RelayedMobiusDevice
@@ -2603,6 +2603,7 @@ async def _tank_with_relayed_pump(hass):
 class TestAutomaticRestart:
     async def test_relay_failures_reaching_the_threshold_restart_the_target(self, hass):
         registry, group = await _tank_with_relayed_pump(hass)
+        group.restart_policy = RestartPolicy(enabled=True)  # off by default in this fork
         coordinator = MobiusDeviceCoordinator(hass, MagicMock(), registry, PUMP_SERIAL, PAN_ID)
         gateway_device = MagicMock(is_connected=True)
 

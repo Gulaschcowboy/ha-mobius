@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.2b1 (fork Gulaschcowboy/ha-mobius, test build on upstream 0.11.1)
+
+Upstream 0.11.1 plus only the dosing container work and two small fixes; the
+fork's gateway/polling experiments (0.10.5b6-b15) are left out.
+
+- Dosing pumps: container entities (remaining, level, days left, container
+  size number, refill button that needs two presses within 10 s, container
+  monitoring sensor disabled by default).
+- Fixed "Dosed today": attribute 2301 (the app's "Dispensed").
+- Dose schedule (Schedule1) is read every 10 minutes: "Daily dose
+  (schedule)", "Expected dosed so far" and "Container days left", computed like
+  the app.
+- Devices that can't be read at startup keep their registry name.
+- Automatic device restarts are disabled by default (RestartPolicy.enabled=False):
+  restarting a dosing pump can cost it its dose, restarting the return pump
+  overfills the sump. Manual reboot buttons are unchanged.
+
 ## 0.11.1
 
 - Renamed the Firmware update entity from "Firmware" to "Firmware update".
