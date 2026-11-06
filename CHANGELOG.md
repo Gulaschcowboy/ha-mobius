@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.1b2 (fork Gulaschcowboy/ha-mobius, test build on upstream 0.12.0)
+
+- Fix: the release zip contains the built dashboard cards
+  (`frontend/dist/mobius-scene-card.js`, `mobius-schedule-card.js`);
+  0.12.1b1 shipped without them, so `/mobius_frontend/*.js` returned 404.
+- Review of PR #5: container monitoring and dosing halt state as enum
+  sensors; container size no longer raises when the pump doesn't report it;
+  container remaining, level, days left, empty and the Refill button are
+  unavailable when the pump doesn't monitor its container.
+- Same python-mobius test wheel as 0.12.1b1 (0.12.1.dev1, commit df15e70).
+
 ## 0.12.1b1 (fork Gulaschcowboy/ha-mobius, test build on upstream 0.12.0)
 
 Upstream 0.12.0 plus the dosing container work, now implemented in
