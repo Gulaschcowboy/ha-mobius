@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.1b1 (fork Gulaschcowboy/ha-mobius, test build on upstream 0.12.0)
+
+Upstream 0.12.0 plus the dosing container work, now implemented in
+python-mobius (fork branch dose-container, commit df15e70) as requested in
+the review of PR #5.
+
+- Requires a python-mobius test wheel (0.12.1.dev1) attached to this release;
+  Home Assistant installs it from the manifest URL.
+- Dosing pumps: container remaining, level, days left, container empty,
+  container size number, refill button (writes on the first press, like the
+  app), daily dose target and dosed today, all from `FullPollResult.dose`.
+  Created only for devices that report dose data.
+- Automatic device restarts are disabled by default (RestartPolicy.enabled=False).
+  Manual reboot buttons are unchanged.
+
 ## 0.12.0
 
 - Requires python-mobius 0.12.0.
