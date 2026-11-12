@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.1b4 (fork Gulaschcowboy/ha-mobius, test build on upstream 0.12.0)
+
+- Dosing pumps report the support tier `dose` instead of `unsupported`
+  (python-mobius#2).
+- Schedule services only write to lights and pumps (allowlist), so a
+  dosing pump never gets a pump schedule written, nor do lights sharing
+  its group mask.
+- python-mobius test wheel 0.12.1.dev3 (commit 908e511, upstream main with
+  PR #1 plus the `dose` support tier).
+
 ## 0.12.1b3 (fork Gulaschcowboy/ha-mobius, test build on upstream 0.12.0)
 
 - Second review of PR #5: the Refill button lets python-mobius read the
