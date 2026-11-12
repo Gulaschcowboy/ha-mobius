@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.1b3 (fork Gulaschcowboy/ha-mobius, test build on upstream 0.12.0)
+
+- Second review of PR #5: the Refill button lets python-mobius read the
+  current container size instead of using the polled one (refreshed only
+  every few minutes); "Expected dosed so far" no longer has a state class,
+  so Home Assistant keeps no long-term sum statistics for it; only
+  `NoMonitor`/`NoSensor` map to the state `none`.
+- python-mobius test wheel 0.12.1.dev2 (commit 5a04b5f): dose schedule
+  points use the shared point header and only accept exactly one 9-byte
+  dose primitive; the container size write rejects booleans.
+
 ## 0.12.1b2 (fork Gulaschcowboy/ha-mobius, test build on upstream 0.12.0)
 
 - Fix: the release zip contains the built dashboard cards
